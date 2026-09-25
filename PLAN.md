@@ -17,31 +17,36 @@ Primary target: Windows 10. Secondary target: Windows 11 (see "Windows 11 notes"
 - Hiding or changing Explorer's taskbar or its tray. Explorer's tray keeps working next to ours (see "Decisions").
 
 ## Key technical facts
-Verified in Phase 0 on Windows 10 22H2 unless marked otherwise. Details are in `FINDINGS.md`.
-- Apps register tray icons by calling `Shell_NotifyIcon`, which sends `WM_COPYDATA` to the first window of class `Shell_TrayWnd` that `FindWindow` returns (the highest in Z-order). Whoever owns that window is the tray host. Apps also ask the host where their icon is (`Shell_NotifyIconGetRect`) and where the taskbar is (`SHAppBarMessage`), and place their menus and flyouts from the answers.
+Verified in Phase 0 and Phase 1 on Windows 10 22H2 unless marked otherwise. Details are in `FINDINGS.md`.
+- Apps register tray icons by calling `Shell_NotifyIcon`, which sends `WM_COPYDATA` to the first window of class `Shell_TrayWnd` that `FindWindow` returns (the highest in Z-order). Whoever owns that window is the tray host. Apps also ask the host where their icon is (`Shell_NotifyIconGetRect`) and where the taskbar is (`SHAppBarMessage`), and place their menus and flyouts from the answers. They ask the host even when the click was in Explorer's own tray, and Explorer itself asks the host about its own taskbar and its hidden-icons chevron (Phase 1).
 - Explorer owns it by default. To become the host while Explorer runs, this app keeps its own hidden `Shell_TrayWnd` above Explorer's, imports the icons Explorer already has, and broadcasts the `TaskbarCreated` registered message so running apps re-register. Explorer raises its taskbar again at times (when it restarts, or when its own flyouts open), so the host must keep checking and re-raise its window.
 - Base library: **ManagedShell** (C#/.NET, **Apache-2.0**, the library behind RetroBar and Cairo Desktop), actively maintained as of September 2026. It implements the host role, the icon import, click and tooltip forwarding, and the answers to icon-position and taskbar-position queries. The UI is a WPF app on top of it.
 - ManagedShell as shipped has gaps that matter for an app running next to Explorer. Each is handled in our `ITrayHost` implementation (see Architecture):
   - It does not forward the icon messages it handles to Explorer. Explorer's tray goes stale while we run (and is empty after an Explorer restart), balloon notifications are swallowed, and icons can be lost when we exit.
   - Taking the role pushes Explorer's taskbar down and removes its always-on-top flag, which stays off after we exit.
   - It answers auto-hide queries (`ABM_GETSTATE`, `ABM_GETAUTOHIDEBAR`) itself, always with "not auto-hide".
+  - It answers every icon-position and taskbar-position query with its own window, including Explorer's own: Explorer's hidden-icons flyout then opens at the top-left corner of the screen, and apps' popups open next to our window even when their icon was clicked in Explorer's tray (Phase 1).
+  - Tray messages already arrive while it starts, before its window can be subclassed (Phase 1).
   - Icon messages are sent messages, so they can run in the middle of any code on the tray thread that waits (locks, calls to other processes, COM). If that happens inside ManagedShell's collection events, it drops the message.
   - When "hide inactive icons" is on, its icon import reverses the order of Explorer's hidden icons each time we start.
 - Built-in icons on Windows 10: volume, network, power, Windows Update, Windows Security and Bluetooth arrive as ordinary tray icons, and their flyouts open next to our window. The clock and Action Center are part of Explorer's taskbar, not tray icons; Action Center opens with `ms-actioncenter:`.
+- `NIM_ADD` carries the calling app's executable path, which shell32 writes relative to a known folder (`{FOLDERID}\rest`) under Windows, System32 and Program Files. Explorer ties a GUID icon to that string, so an add we build for Explorer must carry it in the same form (Phase 1).
+- Windows 10's own flyouts (network, volume, power) ignore the taskbar edge the host reports: they center on the tray or the icon and are then pushed inside the work area, so they overlap a free-floating window (Phase 1).
 - Icon images: each app hands over one `HICON`, usually 16 px at 100% scaling (some apps send 32 or 48 px). There is no larger version to ask for.
 - Reference implementations for the message formats: RetroBar, Cairo Desktop, ReactOS `explorer` (systray), Wine `explorer/systray.c`.
 
 ## Architecture
 - **Language/UI:** C# / .NET, WPF (best per-icon scaling and templating control).
 - **`ITrayHost` interface:** the only place that talks to the shell. Exposes an observable collection of icons (image, tooltip, state, owner) and methods for mouse input (enter, leave, move, button down and up). The UI also reports each icon's screen rectangle and the window's, which apps use to place menus and flyouts. Keeping it behind an interface lets the implementation be swapped or patched per Windows version.
-- **`ITrayHost` implementation:** wraps ManagedShell, unmodified from NuGet and pinned to a tested version. On top of it (all tried in the Phase 0 spike unless marked):
-  - **Mirroring:** after ManagedShell handles an icon message, send the same message on to Explorer's `Shell_TrayWnd`, by subclassing our own tray window. Explorer's tray stays current, Windows keeps showing balloon notifications as toasts, and nothing has to be handed back after an exit or crash. When Explorer rejects a mirrored change for an icon it doesn't know, send it a full add built from the icon's stored state (not built yet).
-  - **Explorer's taskbar:** give it back its always-on-top flag after taking the host role, and keep our hidden window above it.
-  - **Auto-hide queries:** forward `ABM_GETSTATE` and `ABM_GETAUTOHIDEBAR` to Explorer, so apps see Explorer's real auto-hide setting (not built yet).
-  - **Threading:** apply ManagedShell's changes to the UI with `Dispatcher.BeginInvoke`, and never wait on anything inside its event handlers. Compare icons by object reference, not with `NotifyIcon.Equals`.
+- **`ITrayHost` implementation:** wraps ManagedShell, unmodified from NuGet and pinned to a tested version. On top of it (built in Phase 1, in `src/FreeSystemTray.TrayHost`):
+  - **Mirroring:** after ManagedShell handles an icon message, send the same message on to Explorer's `Shell_TrayWnd`, by subclassing our own tray window. Explorer's tray stays current, Windows keeps showing balloon notifications as toasts, and nothing has to be handed back after an exit or crash. When Explorer rejects a mirrored add (it already has the icon), send it as a modify; when it rejects a modify (it doesn't know the icon), send a full add built from the icon's stored state, with the app's executable path in shell32's form.
+  - **Explorer's taskbar:** give it back its always-on-top flag after taking the host role, and keep our hidden window above it. Only once: Explorer drops the flag itself while a full-screen app is in front.
+  - **Auto-hide queries:** forward `ABM_GETSTATE` and `ABM_GETAUTOHIDEBAR(EX)` to Explorer, so apps see Explorer's real auto-hide setting.
+  - **Position queries:** answer icon- and taskbar-position queries with our window only for interactions that start in it (the cursor is on it, or it was clicked within 5 s); otherwise Explorer answers. Explorer's questions about its own taskbar and its hidden-icons chevron always get Explorer's answer.
+  - **Threading:** apply ManagedShell's changes to the UI with `Dispatcher.BeginInvoke`, and never wait on anything inside its event handlers. Compare icons by object reference, not with `NotifyIcon.Equals`. Subclass ManagedShell's window as it is created (a `WH_CBT` hook), because tray messages arrive during its startup.
 - **Window layer:** one borderless, topmost, non-activating tool window (`WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`), so it does not steal focus or appear in Alt+Tab. Phase 0 confirmed that apps' context menus and our tooltips work from such a window.
 - **Settings layer:** JSON config plus theme files. Live reload.
-- **Shell integration:** global hotkey, single-instance mutex, autostart, Explorer-restart handling, and a small watchdog process that broadcasts `TaskbarCreated` if the app dies.
+- **Shell integration:** global hotkey, single-instance mutex, autostart, Explorer-restart handling, and a small watchdog process that broadcasts `TaskbarCreated` if the app dies (the single-instance mutex and the watchdog were built in Phase 1).
 
 ## Phases
 
@@ -52,19 +57,18 @@ Done on 2026-09-25 on Windows 10 22H2 (build 19045.7725). Results and the list o
 - Decision gate: core behavior is reliable on Windows 10.
 - Not tested: Windows 11, elevated tray apps, mixed DPI. These moved to later phases.
 
-### Phase 1: Tray host, core window and placement
-- Production `ITrayHost` implementation from the spike, with everything listed under Architecture. Keep the Phase 0 test app and harness as a smoke test, and rerun it before every ManagedShell upgrade.
-- Verify two things the spike did not test:
-  - Clicking an icon in Explorer's own tray still opens its flyout at the taskbar. Apps ask us, the host, where the icon is. If flyouts go to our window, answer those queries with our window only when the click came from it.
-  - Apps still see an auto-hidden Explorer taskbar as auto-hidden.
-- Borderless topmost tool window, dragging with a lock toggle, multi-monitor awareness, position persistence, optional edge snapping.
-- Report the screen edge nearest the window as the tray's edge, so flyouts open on the correct side. In Phase 0 the network flyout was pushed against the screen edge and overlapped the window.
-- Free-standing floating window first. An AppBar mode that reserves screen space is an optional later addition.
+### Phase 1: Tray host, core window and placement (done)
+Done on 2026-09-25 and 26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDINGS.md` (Phase 1). The app is in `src/`; unit tests and the smoke test are in `tests/`. The smoke test uses the Phase 0 test app and harness; rerun it before every ManagedShell upgrade.
+- Built: the production `ITrayHost` implementation with everything listed under Architecture, and a borderless, topmost tool window with dragging, a lock toggle, optional edge snapping, a saved position that keeps its anchor corner, multi-monitor placement rules, and the nearest screen edge reported to the host.
+- Verified: clicking an icon in Explorer's own tray still opens its flyout or popup at the taskbar; this needed position-query routing and answers for Explorer's own queries. Apps see Explorer's auto-hide state, checked with a temporary auto-hide appbar; the end-to-end check with the taskbar set to auto-hide is left to the user (FINDINGS.md explains how).
+- Not as planned: reporting the nearest edge does not make Windows 10's own flyouts open beside the tray; they overlap a free-floating window wherever it is. **Open decision:** accept this for the floating window and fix it with AppBar mode (docked, outside the work area), or try steering the flyouts by answering with shifted rectangles (fragile). See FINDINGS.md, Phase 1, finding 4.
+- Not tested: multiple monitors and mixed DPI (one monitor; the placement rules are unit-tested with two).
+- Free-standing floating window first. An AppBar mode that reserves screen space is an optional later addition, and the fix for the flyout overlap when the tray is docked.
 
 ### Phase 2: Show/hide
 - Global hotkey (configurable), hotspot at a screen edge or corner, click-away and timed auto-hide, fade or slide animations, and an always-visible mode.
 - Hidden means the window is hidden, not that the tray host role is dropped; icons must keep registering while hidden.
-- While hidden, let Explorer answer icon-position queries, so menus and flyouts open at the taskbar.
+- While hidden, let Explorer answer icon-position queries, so menus and flyouts open at the taskbar (`ITrayHost.TrayWindowVisible` exists for this).
 
 ### Phase 3: Scaling
 - Two independent settings: icon size and window/padding scale. Each accepts any value, as pixels or as a percentage of a base size (for example 167%). No preset steps and no upper or lower clamp beyond sanity limits.
@@ -106,10 +110,10 @@ Done on 2026-09-25 on Windows 10 22H2 (build 19045.7725). Results and the list o
 - Strategy: keep all shell-specific code behind `ITrayHost`. Phase 0 passed on Windows 10; Windows 11 is not tested yet. If it fails there, ship the Windows 10 version and treat 11 as a follow-up.
 
 ## Risks
-1. **Built-in system icons:** work on Windows 10 (Phase 0). Still open: Windows 11, and where flyouts open when an icon is clicked in Explorer's own tray.
-2. **Tray host handover:** confirmed with ManagedShell as shipped (stale or empty Explorer tray, stale tooltips, Explorer's own icons lost after an Explorer restart). Mitigated by mirroring, the taskbar fix and the watchdog. Remaining gap: while Explorer briefly holds the role (up to a few hundred milliseconds, for example when its flyouts open), icon changes go only to Explorer.
+1. **Built-in system icons:** work on Windows 10 (Phase 0), and clicked in Explorer's own tray their flyouts still open at the taskbar (Phase 1). Opened from our window, Windows 10's own flyouts overlap a floating tray (see Phase 1). Still open: Windows 11.
+2. **Tray host handover:** confirmed with ManagedShell as shipped (stale or empty Explorer tray, stale tooltips, Explorer's own icons lost after an Explorer restart). Mitigated by mirroring, the taskbar fix and the watchdog. Remaining gap: while Explorer briefly holds the role (a few hundred milliseconds to about 2 s, for example while the Start menu or its flyouts are open), icon changes go only to Explorer.
 3. **Elevated apps:** messages from admin-level apps to a non-elevated host can be blocked (UIPI). Not tested yet (Phase 6). Consider an option to run elevated.
-4. **Windows updates** can change undocumented behavior we rely on: the format of tray messages in `WM_COPYDATA`, the `FindWindow` Z-order rule, the Explorer internals ManagedShell reads when importing icons, and the Windows 10 blur API.
+4. **Windows updates** can change undocumented behavior we rely on: the format of tray messages in `WM_COPYDATA` (including shell32's executable-path field and its known-folder form), the `FindWindow` Z-order rule, the GUID Explorer uses for its hidden-icons chevron, the Explorer internals ManagedShell reads when importing icons, and the Windows 10 blur API.
 5. **Balloon/toast notifications:** solved by mirroring (Windows shows them).
 6. **Windows 11** tray-host behavior is uncertain and version-dependent.
 7. **ManagedShell upgrades** can change the internals our workarounds rely on. Pin the version and rerun the smoke test before upgrading.
@@ -120,11 +124,11 @@ Done on 2026-09-25 on Windows 10 22H2 (build 19045.7725). Results and the list o
 - 2026-09-25: Use ManagedShell unmodified from NuGet, with no fork. Workarounds stay small and inside the `ITrayHost` implementation. Offering them upstream (for example a "forward handled messages" option) is optional; if one is accepted, delete our workaround.
 
 ## Deliverables
-Source repo with a README, build instructions, a sample theme set, `FINDINGS.md` from Phase 0 (done), the Phase 0 smoke test (`spike/`), and a short test checklist of the apps tested in Phase 0 (in `FINDINGS.md`) and Phase 6.
+Source repo with a README, build instructions, a sample theme set, `FINDINGS.md` from Phase 0 (done), the smoke test (`tests/smoke`, built on the Phase 0 test app and harness in `spike/`), and a short test checklist of the apps tested in Phase 0 (in `FINDINGS.md`) and Phase 6.
 
 ## Instructions to the implementer
-- Phase 0 is done (`FINDINGS.md`). Wait for approval before starting Phase 1.
+- Phases 0 and 1 are done (`FINDINGS.md`). Wait for approval before starting Phase 2.
 - Have real tray apps running during testing, and state which Windows version and build you are testing on.
-- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture.
+- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture. Run the smoke test (`tests/smoke`) after changes to the tray host and before every ManagedShell upgrade.
 - Keep tray host logic behind `ITrayHost` and separate from the UI.
 - Explorer's tray must keep working while our app runs, after it exits, and after it crashes.

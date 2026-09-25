@@ -1,16 +1,21 @@
 # Phase 0 spike
 
 Three small .NET 10 programs used for the Phase 0 feasibility test. Results are in [../FINDINGS.md](../FINDINGS.md).
+`TestTrayApp` and `SpikeTool` also drive the smoke test of the production app (`tests/smoke`).
 
 | Project | What it is |
 |---|---|
-| `TraySpike` | WPF window (borderless, topmost, `WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`) that takes the tray-host role through ManagedShell 0.0.374 and lists the icons in a row. All shell code sits behind `Tray/ITrayHost.cs`. |
+| `TraySpike` | WPF window (borderless, topmost, `WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`) that takes the tray-host role through ManagedShell 0.0.374 and lists the icons in a row. All shell code sits behind `Tray/ITrayHost.cs`. Superseded by `src/`; kept as the Phase 0 reference. |
 | `TestTrayApp` | A tray icon that logs every callback it receives (protocol version 0 or 4) and shows a context menu. It can be controlled from outside, for testing icon updates, balloons and deletes. |
-| `SpikeTool` | Test harness: lists Explorer's own tray icons, the `Shell_TrayWnd` Z-order and visible windows; simulates clicks and keys; broadcasts `TaskbarCreated`; re-registers an icon on behalf of its owner (`replay-add`). |
+| `SpikeTool` | Test harness: lists Explorer's own tray icons, the `Shell_TrayWnd` Z-order and visible windows; simulates clicks, drags and keys; broadcasts `TaskbarCreated`; re-registers an icon on behalf of its owner (`replay-add`). Since Phase 1 also: what apps see from appbar queries (`appbar`, `autohide-probe`) and icon-position queries (`iconrect`), messages to Explorer's tray only (`explorer-add`, `explorer-delete`), and Explorer's taskbar child windows (`explorer-tray`). The command list is at the top of `SpikeTool/Program.cs`. |
+
+`SpikeTool explorer-icons` reads all three of Explorer's tray toolbars. Phase 0's version missed the
+"system-promoted" one, where Windows 10 first shows a newly added icon before it moves it to the
+hidden icons (FINDINGS.md, Phase 1).
 
 ## Build
 
-Requires the .NET 10 SDK. `nuget.config` adds nuget.org, because this machine's NuGet config only had the Visual Studio offline source.
+Requires the .NET 10 SDK. The repository's `nuget.config` adds nuget.org, because this machine's NuGet config only had the Visual Studio offline source.
 
 ```bash
 dotnet build spike/TraySpike/TraySpike.csproj
@@ -48,4 +53,4 @@ TestTrayApp: `TestTrayApp.exe --name Alpha --uid 1 --v4 --log DIR`, then `SpikeT
 
 ## Logs
 
-`phase0-logs/` holds the logs from the test runs referenced in FINDINGS.md. They contain local details (Wi-Fi network name, user paths, app list), so remove them before publishing the repository.
+`phase0-logs/` holds the logs from the test runs referenced in FINDINGS.md. They contain local details (Wi-Fi network name, user paths, app list), so the folder is kept out of git (`.gitignore`) and exists only on the test machine.

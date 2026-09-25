@@ -16,9 +16,19 @@ namespace SpikeTool
     ///   fg                        show the foreground window
     ///   click X Y [left|right|middle|double]
     ///   move X Y                  move the cursor (hover)
+    ///   drag X1 Y1 X2 Y2          left-button drag
     ///   key esc|enter|win+a|win+b
     ///   post "WINDOW TITLE" N     PostMessage(WM_APP+N)
-    ///   taskbarcreated            broadcast the TaskbarCreated message
+    ///   taskbarcreated [HWND]     broadcast the TaskbarCreated message (or post it to one window)
+    ///   appbar                    what apps see from the tray host: ABM_GETTASKBARPOS, ABM_GETSTATE,
+    ///                             ABM_GETAUTOHIDEBAR(EX) per edge; plus Explorer's own ABM_GETSTATE answer
+    ///   autohide-probe [EDGE]     register a temporary auto-hide appbar (default: top edge), ask the
+    ///                             host for the edge's auto-hide bar, then remove it again
+    ///   iconrect HWND UID [GUID]  Shell_NotifyIconGetRect, as the icon's app would call it
+    ///   explorer-delete HWND UID [GUID]  NIM_DELETE sent to Explorer's tray only (it forgets the icon)
+    ///   explorer-add HWND UID GUID|- CALLBACK "EXE PATH" "TIP"  NIM_ADD sent to Explorer's tray only,
+    ///                             with a placeholder icon and the given exe path in shell32's field
+    ///   explorer-tray             Explorer's taskbar child windows (tray area, chevron, clock) with rects
     /// </summary>
     internal static class Program
     {
@@ -37,13 +47,27 @@ namespace SpikeTool
                     case "fg": Foreground(); break;
                     case "click": Click(I(args[1]), I(args[2]), args.Length > 3 ? args[3] : "left"); break;
                     case "move": W.SetCursorPos(I(args[1]), I(args[2])); break;
+                    case "drag": Drag(I(args[1]), I(args[2]), I(args[3]), I(args[4])); break;
                     case "key": Key(args[1]); break;
                     case "post": Post(args[1], I(args[2])); break;
                     case "replay-add": ReplayAdd(args); break;
                     case "taskbarcreated":
+                        if (args.Length > 1)
+                        {
+                            // Only one app re-registers: post it to that app's window.
+                            IntPtr target = new IntPtr(Convert.ToInt64(args[1], 16));
+                            Console.WriteLine($"TaskbarCreated posted to {Describe(target)} -> {W.PostMessage(target, W.RegisterWindowMessage("TaskbarCreated"), IntPtr.Zero, IntPtr.Zero)}");
+                            break;
+                        }
                         W.SendNotifyMessage(new IntPtr(0xFFFF), (uint)W.RegisterWindowMessage("TaskbarCreated"), IntPtr.Zero, IntPtr.Zero);
                         Console.WriteLine("TaskbarCreated broadcast sent");
                         break;
+                    case "appbar": AppBar(); break;
+                    case "autohide-probe": AutoHideProbe(args.Length > 1 ? Edge(args[1]) : 1); break;
+                    case "iconrect": IconRect(args); break;
+                    case "explorer-delete": ExplorerDelete(args); break;
+                    case "explorer-add": ExplorerAdd(args); break;
+                    case "explorer-tray": ExplorerTray(); break;
                     default: Console.WriteLine("unknown command"); return 1;
                 }
                 return 0;
@@ -92,10 +116,14 @@ namespace SpikeTool
             IntPtr notify = W.FindWindowEx(tray, IntPtr.Zero, "TrayNotifyWnd", null);
             IntPtr pager = W.FindWindowEx(notify, IntPtr.Zero, "SysPager", null);
             IntPtr promoted = W.FindWindowEx(pager, IntPtr.Zero, "ToolbarWindow32", null);
+            // Windows 10 first shows a newly added icon here, on the taskbar, before it moves it to
+            // the overflow. The direct ToolbarWindow32 child of TrayNotifyWnd.
+            IntPtr systemPromoted = W.FindWindowEx(notify, IntPtr.Zero, "ToolbarWindow32", null);
             IntPtr overflowWnd = W.FindWindow("NotifyIconOverflowWindow", null);
             IntPtr overflow = overflowWnd == IntPtr.Zero ? IntPtr.Zero : W.FindWindowEx(overflowWnd, IntPtr.Zero, "ToolbarWindow32", null);
 
             int total = 0;
+            total += DumpToolbar("system-promoted", systemPromoted);
             total += DumpToolbar("promoted", promoted);
             total += DumpToolbar("overflow", overflow);
             Console.WriteLine($"TOTAL {total}");
@@ -248,6 +276,22 @@ namespace SpikeTool
             }
         }
 
+        /// <summary>Left-button drag from (x1, y1) to (x2, y2) in 20 steps.</summary>
+        private static void Drag(int x1, int y1, int x2, int y2)
+        {
+            W.SetCursorPos(x1, y1);
+            Thread.Sleep(60);
+            W.SendInput(1, new[] { new W.INPUT { type = 0, mi = new W.MOUSEINPUT { dwFlags = 0x0002 } } }, Marshal.SizeOf<W.INPUT>());
+            const int steps = 20;
+            for (int i = 1; i <= steps; i++)
+            {
+                Thread.Sleep(15);
+                W.SetCursorPos(x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps);
+            }
+            Thread.Sleep(60);
+            W.SendInput(1, new[] { new W.INPUT { type = 0, mi = new W.MOUSEINPUT { dwFlags = 0x0004 } } }, Marshal.SizeOf<W.INPUT>());
+        }
+
         private static void Button(uint down, uint up)
         {
             var inputs = new W.INPUT[2];
@@ -306,6 +350,207 @@ namespace SpikeTool
             Console.WriteLine($"replay NIM_ADD hwnd={a[1]} uid={a[2]} guid={a[5]} -> {ok} (err {err}), SETVERSION -> {vok}");
         }
 
+        #region Phase 1 probes: appbar queries, icon rectangles, Explorer-only messages
+
+        private static int Edge(string s) => s.ToLowerInvariant() switch
+        {
+            "left" => 0,
+            "top" => 1,
+            "right" => 2,
+            "bottom" => 3,
+            _ => throw new ArgumentException("edge must be left, top, right or bottom")
+        };
+
+        private static readonly string[] EdgeNames = { "left", "top", "right", "bottom" };
+
+        /// <summary>Explorer's own taskbar: the Shell_TrayWnd owned by explorer.exe.</summary>
+        private static IntPtr ExplorerTrayWnd()
+        {
+            IntPtr h = IntPtr.Zero;
+            while ((h = W.FindWindowEx(IntPtr.Zero, h, "Shell_TrayWnd", null)) != IntPtr.Zero)
+            {
+                W.GetWindowThreadProcessId(h, out uint p);
+                if (Proc(p).Equals("explorer", StringComparison.OrdinalIgnoreCase)) return h;
+            }
+            return IntPtr.Zero;
+        }
+
+        private static string Describe(IntPtr h)
+        {
+            if (h == IntPtr.Zero) return "0";
+            W.GetWindowThreadProcessId(h, out uint pid);
+            return $"0x{h.ToInt64():X} [{Cls(h)}] {Proc(pid)}({pid})";
+        }
+
+        private static W.RECT PrimaryMonitor() => new() { Left = 0, Top = 0, Right = W.GetSystemMetrics(0), Bottom = W.GetSystemMetrics(1) };
+
+        private static void AppBar()
+        {
+            IntPtr host = W.FindWindow("Shell_TrayWnd", null);
+            Console.WriteLine($"tray host (FindWindow): {Describe(host)}");
+
+            var abd = new W.APPBARDATA { cbSize = Marshal.SizeOf<W.APPBARDATA>() };
+            ulong ok = (ulong)W.SHAppBarMessage(5 /*ABM_GETTASKBARPOS*/, ref abd);
+            string edge = abd.uEdge < 4 ? EdgeNames[abd.uEdge] : abd.uEdge.ToString(CultureInfo.InvariantCulture);
+            Console.WriteLine($"ABM_GETTASKBARPOS -> {ok}: rect=[{abd.rc.Left},{abd.rc.Top},{abd.rc.Right - abd.rc.Left},{abd.rc.Bottom - abd.rc.Top}] edge={edge}");
+
+            abd = new W.APPBARDATA { cbSize = Marshal.SizeOf<W.APPBARDATA>() };
+            ulong state = (ulong)W.SHAppBarMessage(4 /*ABM_GETSTATE*/, ref abd);
+            Console.WriteLine($"ABM_GETSTATE -> {state} (autohide={(state & 1) != 0}, alwaysontop={(state & 2) != 0})");
+
+            IntPtr explorer = ExplorerTrayWnd();
+            if (explorer != IntPtr.Zero)
+                Console.WriteLine($"ABM_GETSTATE sent to Explorer's taskbar directly -> {SendAppBarDirect(explorer, 4, 0)}");
+
+            W.RECT monitor = PrimaryMonitor();
+            for (int e = 0; e < 4; e++)
+            {
+                abd = new W.APPBARDATA { cbSize = Marshal.SizeOf<W.APPBARDATA>(), uEdge = (uint)e };
+                IntPtr bar = (IntPtr)(long)(ulong)W.SHAppBarMessage(7 /*ABM_GETAUTOHIDEBAR*/, ref abd);
+                abd.rc = monitor;
+                IntPtr barEx = (IntPtr)(long)(ulong)W.SHAppBarMessage(11 /*ABM_GETAUTOHIDEBAREX*/, ref abd);
+                Console.WriteLine($"ABM_GETAUTOHIDEBAR {EdgeNames[e],-6} -> {Describe(bar)}; EX (primary monitor) -> {Describe(barEx)}");
+            }
+        }
+
+        /// <summary>An appbar message sent straight to a window as WM_COPYDATA (no shared memory: GETSTATE only).</summary>
+        private static long SendAppBarDirect(IntPtr target, int abm, uint edge)
+        {
+            var payload = new byte[64];
+            BitConverter.GetBytes(40).CopyTo(payload, 0);            // APPBARDATA.cbSize (32-bit layout)
+            BitConverter.GetBytes(edge).CopyTo(payload, 12);         // uEdge
+            BitConverter.GetBytes(abm).CopyTo(payload, 40);          // dwMessage
+            BitConverter.GetBytes(Environment.ProcessId).CopyTo(payload, 56);
+            return SendCopyData(target, 0, payload).ToInt64();
+        }
+
+        private static IntPtr SendCopyData(IntPtr target, long dwData, byte[] payload, IntPtr wParam = default)
+        {
+            IntPtr data = Marshal.AllocHGlobal(payload.Length);
+            IntPtr cds = Marshal.AllocHGlobal(Marshal.SizeOf<W.COPYDATASTRUCT>());
+            try
+            {
+                Marshal.Copy(payload, 0, data, payload.Length);
+                Marshal.StructureToPtr(new W.COPYDATASTRUCT { dwData = (IntPtr)dwData, cbData = payload.Length, lpData = data }, cds, false);
+                return W.SendMessage(target, 0x004A /*WM_COPYDATA*/, wParam, cds);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(cds);
+                Marshal.FreeHGlobal(data);
+            }
+        }
+
+        private static void AutoHideProbe(int edge)
+        {
+            IntPtr wnd = W.CreateWindowEx(0x80 /*WS_EX_TOOLWINDOW*/, "STATIC", "SpikeTool auto-hide probe", unchecked((int)0x80000000) /*WS_POPUP*/,
+                0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            Console.WriteLine($"probe window {Describe(wnd)}; tray host {Describe(W.FindWindow("Shell_TrayWnd", null))}");
+            var abd = new W.APPBARDATA { cbSize = Marshal.SizeOf<W.APPBARDATA>(), hWnd = wnd, uCallbackMessage = 0x8000 + 77, uEdge = (uint)edge };
+            try
+            {
+                Console.WriteLine($"ABM_NEW -> {(ulong)W.SHAppBarMessage(0, ref abd)}");
+                abd.lParam = (IntPtr)1;
+                Console.WriteLine($"ABM_SETAUTOHIDEBAR {EdgeNames[edge]} on -> {(ulong)W.SHAppBarMessage(8, ref abd)}");
+
+                var q = new W.APPBARDATA { cbSize = Marshal.SizeOf<W.APPBARDATA>(), uEdge = (uint)edge };
+                IntPtr bar = (IntPtr)(long)(ulong)W.SHAppBarMessage(7 /*ABM_GETAUTOHIDEBAR*/, ref q);
+                q.rc = PrimaryMonitor();
+                IntPtr barEx = (IntPtr)(long)(ulong)W.SHAppBarMessage(11 /*ABM_GETAUTOHIDEBAREX*/, ref q);
+                Console.WriteLine($"ABM_GETAUTOHIDEBAR {EdgeNames[edge]} -> {Describe(bar)} {(bar == wnd ? "(the probe: PASS)" : "(not the probe: FAIL)")}");
+                Console.WriteLine($"ABM_GETAUTOHIDEBAREX {EdgeNames[edge]} -> {Describe(barEx)} {(barEx == wnd ? "(the probe: PASS)" : "(not the probe: FAIL)")}");
+            }
+            finally
+            {
+                abd.lParam = IntPtr.Zero;
+                Console.WriteLine($"ABM_SETAUTOHIDEBAR off -> {(ulong)W.SHAppBarMessage(8, ref abd)}");
+                Console.WriteLine($"ABM_REMOVE -> {(ulong)W.SHAppBarMessage(1, ref abd)}");
+                W.DestroyWindow(wnd);
+            }
+        }
+
+        private static void IconRect(string[] a)
+        {
+            var id = new W.NOTIFYICONIDENTIFIER
+            {
+                cbSize = Marshal.SizeOf<W.NOTIFYICONIDENTIFIER>(),
+                hWnd = new IntPtr(Convert.ToInt64(a[1], 16)),
+                uID = uint.Parse(a[2], CultureInfo.InvariantCulture),
+                guidItem = a.Length > 3 ? Guid.Parse(a[3]) : Guid.Empty
+            };
+            int hr = W.Shell_NotifyIconGetRect(ref id, out W.RECT r);
+            Console.WriteLine(hr == 0 ? $"icon rect [{r.Left},{r.Top},{r.Right - r.Left},{r.Bottom - r.Top}]" : $"Shell_NotifyIconGetRect failed: 0x{hr:X8}");
+        }
+
+        /// <summary>NIM_DELETE sent only to Explorer's taskbar, so Explorer forgets an icon the host still has.</summary>
+        private static void ExplorerDelete(string[] a)
+        {
+            IntPtr explorer = ExplorerTrayWnd();
+            if (explorer == IntPtr.Zero) { Console.WriteLine("Explorer's taskbar not found"); return; }
+            // Same shape as shell32's message on Windows 10 22H2: 1484 bytes (SHELLTRAYDATA with a
+            // 32-bit NOTIFYICONDATAW, cbSize 956, then 520 more bytes), wParam = the icon's window.
+            var payload = new byte[1484];
+            uint hwnd = (uint)Convert.ToInt64(a[1], 16);
+            BitConverter.GetBytes(0x34753423u).CopyTo(payload, 0);   // signature
+            BitConverter.GetBytes(2u).CopyTo(payload, 4);            // NIM_DELETE
+            BitConverter.GetBytes(956).CopyTo(payload, 8);           // cbSize
+            BitConverter.GetBytes(hwnd).CopyTo(payload, 12);
+            BitConverter.GetBytes(uint.Parse(a[2], CultureInfo.InvariantCulture)).CopyTo(payload, 16);
+            if (a.Length > 3)
+            {
+                BitConverter.GetBytes(0x20u).CopyTo(payload, 20);    // NIF_GUID
+                Guid.Parse(a[3]).ToByteArray().CopyTo(payload, 8 + 936);
+            }
+            Console.WriteLine($"NIM_DELETE to Explorer's taskbar {Describe(explorer)} -> {SendCopyData(explorer, 1, payload, new IntPtr(hwnd))}");
+        }
+
+        /// <summary>
+        /// NIM_ADD sent only to Explorer's taskbar, shaped like shell32's (1484 bytes, exe path after
+        /// NOTIFYICONDATAW), to find out which exe path forms Explorer accepts for a GUID icon.
+        /// </summary>
+        private static void ExplorerAdd(string[] a)
+        {
+            IntPtr explorer = ExplorerTrayWnd();
+            if (explorer == IntPtr.Zero) { Console.WriteLine("Explorer's taskbar not found"); return; }
+            var payload = new byte[1484];
+            uint hwnd = (uint)Convert.ToInt64(a[1], 16);
+            uint flags = 0x1 | 0x2 | 0x4;                            // NIF_MESSAGE | NIF_ICON | NIF_TIP
+            BitConverter.GetBytes(0x34753423u).CopyTo(payload, 0);   // signature
+            BitConverter.GetBytes(0u).CopyTo(payload, 4);            // NIM_ADD
+            BitConverter.GetBytes(956).CopyTo(payload, 8);           // cbSize
+            BitConverter.GetBytes(hwnd).CopyTo(payload, 12);
+            BitConverter.GetBytes(uint.Parse(a[2], CultureInfo.InvariantCulture)).CopyTo(payload, 16);
+            BitConverter.GetBytes(Convert.ToUInt32(a[4], 16)).CopyTo(payload, 24);   // uCallbackMessage
+            BitConverter.GetBytes((uint)W.LoadIcon(IntPtr.Zero, new IntPtr(32518)).ToInt64()).CopyTo(payload, 28); // IDI_SHIELD
+            byte[] tip = Encoding.Unicode.GetBytes(a[6]);
+            Array.Copy(tip, 0, payload, 32, Math.Min(tip.Length, 254));
+            if (a[3] != "-")
+            {
+                flags |= 0x20;                                       // NIF_GUID
+                Guid.Parse(a[3]).ToByteArray().CopyTo(payload, 8 + 936);
+            }
+            BitConverter.GetBytes(flags).CopyTo(payload, 20);
+            byte[] path = Encoding.Unicode.GetBytes(a[5]);
+            Array.Copy(path, 0, payload, 964, Math.Min(path.Length, 518));
+            Console.WriteLine($"NIM_ADD '{a[5]}' to Explorer's taskbar -> {SendCopyData(explorer, 1, payload, new IntPtr(hwnd))}");
+        }
+
+        private static void ExplorerTray()
+        {
+            IntPtr explorer = ExplorerTrayWnd();
+            if (explorer == IntPtr.Zero) { Console.WriteLine("Explorer's taskbar not found"); return; }
+            W.GetWindowRect(explorer, out W.RECT tr);
+            Console.WriteLine($"{Describe(explorer)} rect=[{tr.Left},{tr.Top},{tr.Right - tr.Left},{tr.Bottom - tr.Top}]");
+            W.EnumChildWindows(explorer, (h, _) =>
+            {
+                W.GetWindowRect(h, out W.RECT r);
+                Console.WriteLine($"  0x{h.ToInt64():X} [{Cls(h)}] '{Title(h)}' rect=[{r.Left},{r.Top},{r.Right - r.Left},{r.Bottom - r.Top}]{(W.IsWindowVisible(h) ? "" : " hidden")}");
+                return true;
+            }, IntPtr.Zero);
+        }
+
+        #endregion
+
         private static void Post(string title, int n)
         {
             IntPtr h = W.FindWindow(null, title);
@@ -357,6 +602,40 @@ namespace SpikeTool
             public IntPtr hBalloonIcon;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct APPBARDATA
+        {
+            public int cbSize;
+            public IntPtr hWnd;
+            public uint uCallbackMessage;
+            public uint uEdge;
+            public RECT rc;
+            public IntPtr lParam;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct NOTIFYICONIDENTIFIER
+        {
+            public int cbSize;
+            public IntPtr hWnd;
+            public uint uID;
+            public Guid guidItem;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct COPYDATASTRUCT
+        {
+            public IntPtr dwData;
+            public int cbData;
+            public IntPtr lpData;
+        }
+
+        [DllImport("shell32.dll")] public static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
+        [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER id, out RECT rect);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr CreateWindowEx(int exStyle, string cls, string name, int style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+        [DllImport("user32.dll")] public static extern bool DestroyWindow(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc p, IntPtr l);
+        [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
         [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool Shell_NotifyIcon(uint msg, ref NOTIFYICONDATA d);
         [DllImport("user32.dll")] public static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr name);
         [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
