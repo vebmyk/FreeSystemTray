@@ -1,0 +1,10 @@
+# Build output
+bin/
+obj/
+.vs/
+*.user
+TestResults/
+
+# Phase 0 test logs. They contain local details (Wi-Fi network name, user paths,
+# installed apps), so they stay on disk and out of the repository.
+spike/phase0-logs/
