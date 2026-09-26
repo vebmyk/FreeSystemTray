@@ -4,10 +4,10 @@ A free-standing system tray (notification area) for Windows: a small borderless 
 anywhere, showing the tray icons of running apps. Clicks, menus, tooltips and flyouts work as they do
 in Explorer's tray, and Explorer's own tray keeps working next to it.
 
-Status: Phases 1 to 5 of [PLAN.md](PLAN.md) (tray host, window and placement; show/hide; scaling;
-themes; management: icon rules, hidden icons, a settings window, autostart), tested on Windows 10
-22H2. Robustness and packaging (Phase 6) come next. Findings from testing are in
-[FINDINGS.md](FINDINGS.md).
+Status: all phases of [PLAN.md](PLAN.md) are done (tray host, window and placement; show/hide;
+scaling; themes; management: icon rules, hidden icons, a settings window, autostart; robustness and
+a portable build), tested on Windows 10 22H2. Findings from testing, and a checklist of the real apps
+tested, are in [FINDINGS.md](FINDINGS.md).
 
 ## Build and run
 
@@ -19,7 +19,8 @@ dotnet test tests/FreeSystemTray.Tests/FreeSystemTray.Tests.csproj
 src/FreeSystemTray/bin/Debug/net10.0-windows/FreeSystemTray.exe
 ```
 
-The tray appears above the bottom-right corner of the primary screen.
+The tray appears above the bottom-right corner of the primary screen. For a build to use without
+the SDK, see [Portable build](#portable-build).
 
 - **Move it** by dragging the grip on its left edge. It snaps to screen and work-area edges when
   an edge comes within 12 px (at 100% scaling). The position is saved as the corner nearest a screen
@@ -39,9 +40,33 @@ FreeSystemTray when I sign in** (settings, General) adds it to the user's Run ke
 Manager's Startup tab lists it.
 
 Settings are in `%LOCALAPPDATA%\FreeSystemTray\settings.json` and logs in
-`%LOCALAPPDATA%\FreeSystemTray\logs`. Edits to the settings file apply while the app runs. A second
-copy of the exe runs as a watchdog: if the tray process crashes or is killed, the watchdog hands the
-icons back to Explorer.
+`%LOCALAPPDATA%\FreeSystemTray\logs` (in a portable copy, in `data` next to the exe). Edits to the
+settings file apply while the app runs.
+
+A second copy of the exe runs as a watchdog. If the tray process crashes or is killed, the watchdog
+hands the icons back to Explorer. After a crash it also starts FreeSystemTray again, unless it keeps
+crashing soon after starting (three times in a row); not when someone ended it on purpose (Task
+Manager, `taskkill`), and not while Windows is signing out. **Start FreeSystemTray again if it
+crashes** (settings, General) or `"restartAfterCrash": false` turns that off. If the tray stops
+responding for about 25 s (apps' icon messages to it then fail), the watchdog ends it and treats it
+as a crash.
+
+Tooltips and popups behave as in Explorer's tray: apps whose icons ask for the standard tooltip get
+it, after the same delay; version 4 icons that do not are sent `NIN_POPUPOPEN` instead, to show a
+popup of their own. A rule's replacement tooltip is always shown.
+
+### Portable build
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/Publish.ps1
+```
+
+This makes `dist\FreeSystemTray-0.1.0-win-x64\` and a zip of it: one exe with the .NET runtime
+inside (about 73 MB; nothing to install), the built-in themes, the README and the third-party
+licenses, and `portable.txt`. While `portable.txt` is next to the exe, settings, themes and logs are kept in a
+`data` folder beside it; delete it to use `%LOCALAPPDATA%\FreeSystemTray` instead. Unzip it
+anywhere you can write to. `-FrameworkDependent` makes a small exe that needs the .NET 10 Desktop
+Runtime instead.
 
 ### Arranging icons
 
@@ -211,7 +236,8 @@ Both write what happened to the log and exit with 1 if they fail.
 | `--autostart` | Started at sign-in (the Run key's command has it): wait up to a minute for Explorer's taskbar, and exit quietly if an instance is running already. |
 | `--import-theme FILE`, `--export-theme FILE` | Import a theme and switch to it, or write the current one to FILE (see "Themes"). |
 | `--no-watchdog` | Don't start the watchdog process. |
-| `--no-mirror`, `--no-topmost-fix`, `--no-autohide-forward`, `--no-query-routing` | Turn off one workaround (ManagedShell as shipped), for comparison tests. |
+| `--no-mirror`, `--no-topmost-fix`, `--no-autohide-forward`, `--no-query-routing`, `--no-own-import`, `--no-role-keeper`, `--no-explorer-sync` | Turn off one workaround (ManagedShell as shipped), for comparison tests. |
+| `--debug-crash`, `--debug-hang SECONDS` | Make the running instance crash, or stop responding for SECONDS, to test the watchdog. Only an instance started with `--diag` does. |
 
 ## How it works
 
@@ -225,7 +251,15 @@ hidden `Shell_TrayWnd` above Explorer's, so apps send their icon messages to thi
   interacting with it, so flyouts opened from Explorer's own tray stay at the taskbar;
 - Explorer's taskbar gets its always-on-top flag back after ManagedShell takes it away;
 - Explorer's own tray is read now and then (on a background thread) to learn where Explorer shows
-  each icon, and which ones it hides.
+  each icon, and which ones it hides;
+- Explorer's icons are imported at start by reading its tray, without switching off its "hide
+  inactive icons" (which reversed the order of its hidden icons);
+- when Explorer's taskbar goes above this app's `Shell_TrayWnd` (whenever it gets the foreground),
+  a Z-order event raises ours again within about a millisecond, and icon changes that reached only
+  Explorer meanwhile are caught up on;
+- after Explorer restarts, its new tray gets the icons it lacks, and icons of windows that no longer
+  exist are removed from both trays;
+- hovering sends apps what Explorer sends them.
 
 All shell code is behind `ITrayHost` in `src/FreeSystemTray.TrayHost`. FINDINGS.md explains why
 each workaround is needed.
@@ -233,25 +267,37 @@ each workaround is needed.
 ## Smoke test
 
 Run it before every ManagedShell upgrade and after changes to the tray host, show/hide, scaling,
-themes or icon management. It builds the solution, starts four test tray icons and the app, and
-checks mirroring, the fix-ups, the query answers, clicks, showing and hiding (commands, the hidden
-state, a settings edit, hotspot, hotkey, click-away, the timer, a menu keeping the tray shown),
-stepping behind full-screen windows, icon and tray sizes, themes, icon rules and the hidden-icons
-flyout (rules, an icon Windows hides, order, dragging, the icon menu), the tray's own menus staying
-open, the app's own icon, the settings window, and the hand-back to Explorer after an exit and after
-a kill (89 checks).
+themes or icon management. It builds the solution, starts five test tray apps and the app, and
+checks mirroring, the fix-ups, the query answers, the import, taking the host role back and catching
+up afterwards, removing icons of dead apps, clicks, tooltips and popups, showing and hiding
+(commands, the hidden state, a settings edit, hotspot, hotkey, click-away, the timer, a menu keeping
+the tray shown), stepping behind full-screen windows, icon and tray sizes, themes, icon rules and the
+hidden-icons flyout (rules, an icon Windows hides, order, dragging, the icon menu), the tray's own
+menus staying open, the app's own icon, the settings window, the hand-back to Explorer after an exit
+and after a kill, and the watchdog after a real crash and a hang (107 checks).
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-SmokeTest.ps1
 ```
 
-For about a minute and a half it moves the mouse, clicks and drags the test icons, clicks windows
-of its own, presses the hotkey, Shift and Esc, and twice covers the primary screen with a full-screen
-window of its own for a few seconds; before each step it waits until mouse and keyboard have been
-left alone for 1.5 s. `-SkipMouse` leaves those checks out. It also shows one Windows notification
-from the balloon check, tells Explorer to hide one test icon for a few seconds, and near the end
-opens the settings window (which takes the keyboard focus) until it closes the app. FreeSystemTray
-must not be running. The exit code is the number of failed checks.
+For about four minutes it moves the mouse, clicks and drags the test icons, clicks windows of its
+own, presses the hotkey, Shift and Esc, and twice covers the primary screen with a full-screen window
+of its own for a few seconds; before each step it waits until mouse and keyboard have been left alone
+for 1.5 s. `-SkipMouse` leaves those checks out. It also shows one Windows notification from the
+balloon check, tells Explorer to hide one test icon for a few seconds, puts Explorer's taskbar above
+the tray's for a moment, near the end opens the settings window (which takes the keyboard focus), and
+lets a test tray hang for about 25 s. FreeSystemTray must not be running, and no elevated window may
+be in the foreground (Windows drops simulated input then). `-AppPath` tests a published exe instead of
+the build. The exit code is the number of failed checks.
+
+The Explorer restart test restarts Explorer twice while FreeSystemTray hosts the tray, then exits it
+once and kills it once, and checks that Explorer's tray has every icon again each time (20 checks).
+It refuses to run while a File Explorer window is open; the taskbar disappears for a few seconds each
+time.
+
+```bash
+powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-ExplorerRestartTest.ps1
+```
 
 ## Layout
 
@@ -259,12 +305,15 @@ must not be running. The exit code is the number of failed checks.
 |---|---|
 | `src/FreeSystemTray.TrayHost` | `ITrayHost` and its ManagedShell implementation: the only code that talks to the shell. |
 | `src/FreeSystemTray` | The WPF app: tray window, placement, show/hide (`ShowHide/`), scaling (`Scaling/`), themes (`Theming/`, and the built-in ones in `Themes/`), icon rules and arrangement (`Icons/`), the hidden-icons flyout, dragging icons, the settings window, the app's own icon, autostart, settings, logging, watchdog. |
-| `tests/FreeSystemTray.Tests` | Unit tests: placement, message formats, routing and fix-up rules, settings, hotkeys, hotspots, auto-hide rules, full-screen tracking, sizes and icon resampling, themes, the icon panel, icon rules, arrangement and order, where Explorer shows an icon, flyout placement, autostart. |
-| `tests/smoke` | The end-to-end smoke test. |
+| `tests/FreeSystemTray.Tests` | Unit tests: placement, message formats, routing and fix-up rules, settings, hotkeys, hotspots, auto-hide rules, full-screen tracking, sizes and icon resampling, themes, the icon panel, icon rules, arrangement and order, where Explorer shows an icon, flyout placement, autostart, catching up with Explorer's tray after a gap, building tray messages, the crash policy. |
+| `tests/smoke` | The end-to-end smoke test and the Explorer restart test. |
 | `tools/Make-AppIcon.ps1` | Draws `src/FreeSystemTray/FreeSystemTray.ico`. |
+| `tools/Publish.ps1` | The portable build. |
+| `licenses` | Third-party notices and ManagedShell's license, copied into the portable build. |
 | `spike` | Phase 0 feasibility spike, the test tray app and the SpikeTool harness (see [spike/README.md](spike/README.md)). |
 
 ## Third-party code
 
-ManagedShell is licensed under Apache-2.0. A redistributed build must include its LICENSE and keep
-its NOTICE and attributions (packaging is Phase 6).
+ManagedShell is licensed under Apache-2.0 (it has no NOTICE file); the .NET runtime and the packages
+ManagedShell uses are MIT. The portable build carries `THIRD-PARTY-NOTICES.txt` and
+`ManagedShell-LICENSE.txt` from `licenses/`. FreeSystemTray itself has no license file yet.

@@ -1,8 +1,247 @@
 # Findings
 
-The newest phase comes first: Phase 5 (management), Phase 4 (appearance and themes), Phase 3
-(scaling), Phase 2 (show/hide), Phase 1 (production tray host, window and placement). The Phase 0
-feasibility report follows unchanged, apart from notes where Phase 1 corrected it.
+The newest phase comes first: Phase 6 (robustness and polish), Phase 5 (management), Phase 4
+(appearance and themes), Phase 3 (scaling), Phase 2 (show/hide), Phase 1 (production tray host, window
+and placement). The Phase 0 feasibility report follows unchanged, apart from notes where Phase 1
+corrected it.
+
+## Phase 6: robustness and polish
+
+Date: 2026-09-26. Same machine and setup as before (Windows 10 Pro 22H2, build 19045.7725, one
+1920×1080 monitor at 100%, ManagedShell 0.0.374 on .NET 10, Open-Shell's Start menu). Real tray apps
+running: PowerToys (and Awake), Command Palette, Launchy, Directory Opus, Listary, Google Drive,
+qBittorrent, Windows Security, and Explorer's Bluetooth, battery, network, volume and (hidden) Meet
+Now; Task Manager, elevated, for the tests of an elevated app. How to use the new parts is in
+[README.md](README.md).
+
+### Phase 6 verdict
+
+**The tray is robust against Explorer, against itself, and against apps.** Unit tests (296), the
+smoke test (107 checks, 18 of them new) and a new Explorer restart test (20 checks) pass on the
+Release build. In detail:
+
+- **Explorer restarting while we host, then an exit or a crash** (the cases that broke the hand-back
+  with ManagedShell as shipped): Explorer's tray has every icon again afterwards, its own included,
+  also those of an app that does not register again after TaskbarCreated (we give them to it).
+- **The host role** is taken back 1 ms after Explorer's taskbar goes above ours (it was up to
+  ManagedShell's 100 ms check, and 215 ms was measured), and icon changes that reached only Explorer
+  meanwhile are caught up on.
+- **Starting no longer reverses Explorer's hidden-icons order.**
+- **Tooltips and popups as in Explorer** (measured first; finding 2).
+- **Crash safety:** after a crash the watchdog starts the tray again (at most three times in a row
+  while it keeps crashing soon after starting); a hung tray is ended after about 25 s.
+- **A portable build** (`tools/Publish.ps1`).
+- **Real apps,** including elevated Task Manager, work from the tray (checklist below).
+
+The portable build had one bug the other builds cannot have (finding 6), found by the smoke test
+against it and fixed; after the fix I could check it only by hand (a hover, a click, an exit),
+because Claude Code's permission check refused to let me run the smoke test against the published
+exe. **A full smoke-test run of the portable build is still open**; the command is under
+[Checking the portable build](#checking-the-portable-build).
+
+### What Phase 6 built
+
+- **Import without "hide inactive icons".** `ManagedShellTrayHost` reads Explorer's three tray
+  toolbars before it takes the role and hands the icons to ManagedShell during its `Initialize()`,
+  when ManagedShell creates its `TrayNotifyWnd` child: after our window exists (so ManagedShell
+  forwards what it rejects to Explorer, finding 4), before TaskbarCreated (so the imported icons come
+  first, in Explorer's order). ManagedShell's own import, which switches the setting off and on, is
+  skipped: it runs only while `EnvironmentHelper.IsAppRunningAsShell` is false, and that flag is set
+  for the moment between the start of `Initialize()` and the creation of our window.
+- **`HostRoleKeeper`**, a thread with a WinEvent hook: on every `EVENT_OBJECT_REORDER` of the desktop
+  window it checks which `Shell_TrayWnd` is highest and raises ours (posted, so it never waits for the
+  tray thread), checks again every 5 ms until ours is back, and reports the gap. At most 40 raises a
+  second, then one every 250 ms, so a shell that insists is not fought in a busy loop.
+- **Catching up after a gap (`GapSync`).** Explorer's tray is read once the gap is over and compared
+  with a read from before it: an icon added, deleted or changed (tooltip, icon, hidden, callback,
+  version) in Explorer's tray since then, where ours disagrees, happened during the gap and is applied
+  to ours. Changes made through us before the gap show up too but agree with ours. After an Explorer
+  restart only additions count.
+- **Explorer restart recovery.** When Explorer's taskbar is new, its tray gets, 4 s later, every icon
+  of ours it still lacks, as a full add built from our state (as the mirroring fix-up does).
+- **Icons of dead windows** are removed from both trays (read every 3 s); Explorer and ManagedShell
+  both remove them only when the pointer passes over them. An icon with a GUID gets 10 s, since its app
+  (or Explorer, for its own icons) may register the same GUID again from a new window (finding 7).
+- **Hovering as Explorer does:** WM_MOUSEMOVE when the pointer arrives; for version 4 icons without
+  NIF_SHOWTIP, NIN_POPUPOPEN after the double-click time and no tooltip of ours, NIN_POPUPCLOSE when
+  the pointer leaves, a button goes down, or the tray hides; no WM_MOUSEHOVER or WM_MOUSELEAVE.
+  NIF_SHOWTIP is noted from every add and modify. Our tooltips appear after the double-click time too
+  (WPF's default was 1 s). A rule's tooltip is always shown.
+- **The watchdog:** starts the tray again after a crash (`CrashPolicy`: an unhandled exception, an
+  access violation or fail-fast, not a process someone ended; at most 3 times in a row within 10
+  minutes of starting; not while Windows ends the session; setting `restartAfterCrash`), with the same
+  arguments. It probes the tray thread with WM_NULL every 5 s and ends a tray that does not answer 4
+  probes in a row (about 25 s), which then counts as a crash. Not while a debugger is attached.
+- **Graceful shutdown and logging:** the session ending is logged (WPF exits the app, and the tray
+  is handed back); unobserved task exceptions are logged; restarts are logged by both processes.
+- **Portable build:** one self-contained exe (73 MB, 67.5 MB zipped) with the themes, `portable.txt`
+  (settings, themes and logs then live in a `data` folder next to the exe), the README and the
+  licenses. `licenses/` holds ManagedShell's Apache-2.0 text and the third-party notices.
+- **Tests:** the Explorer restart test (`tests/smoke/Invoke-ExplorerRestartTest.ps1`); 18 smoke
+  checks; `--debug-crash` and `--debug-hang` for the watchdog checks (only an instance started with
+  `--diag` obeys them); `--no-own-import`, `--no-role-keeper`, `--no-explorer-sync` for comparisons;
+  TestTrayApp with several icons, hiding, and ignoring TaskbarCreated; SpikeTool `watch-zorder`,
+  `raise-explorer`, `watch-tooltips`, `explorer-tip`, `notify`, and `raise` after the `explorer-*`
+  commands.
+
+### Phase 6 results
+
+| Check | Result |
+|---|---|
+| Explorer restarts while we host, then we exit | ✅ Twice. Explorer's new tray had all 18 (later 31) icons again 4 s after the restart, our own too; after our exit every icon it had before, Windows Security included. |
+| The same, then we crash (killed) | ✅ Twice. The watchdog handed back; every icon there, with the latest tooltip; our dead icon removed. |
+| An app that ignores TaskbarCreated, during an Explorer restart | ✅ Explorer's new tray got it from us ("Gave Explorer's new tray 1 icon it lacked"); without us it would have lost it. |
+| Explorer's own icons after its restart | ✅ Updated in place in our tray (their GUIDs came back from new windows within 2 s). Before the grace period they were removed as dead 1.5 s before that and came back at the end of the tray. |
+| Explorer's taskbar raised above ours | ✅ Ours on top again 0 to 1 ms later, in every smoke run and both Explorer restarts. |
+| A tooltip, an add and a delete sent to Explorer only, then a gap | ✅ All three caught up on within about 5 ms of the gap's end. |
+| Starting: Explorer's hidden-icons order | ✅ Unchanged, checked in every smoke run (13 to 15 icons in the flyout). |
+| An app killed without deleting its icons | ✅ Gone from both trays within 3 s. |
+| Hover: v4 without NIF_SHOWTIP, v4 with it, v0 | ✅ As in Explorer (finding 2): NIN_POPUPOPEN after 500 ms and no tooltip; NIN_POPUPCLOSE on leave, before a click's button-down, and when the tray hides; with NIF_SHOWTIP and v0 our tooltip and no popup messages. |
+| A real crash (`--debug-crash`) | ✅ Exit code 0xE0434352, handed back, started again 1 s later. |
+| Killed on purpose (`Stop-Process`, exit code −1) | ✅ Handed back, not started again. |
+| Hung (`--debug-hang 120`) | ✅ Ended 23 to 39 s after it stopped answering (39 s before the probes were made faster), handed back, started again. |
+| Crash loop | ✅ Seen for real: the first portable build crashed 4 times, each soon after starting; the watchdog started it again 3 times, then stopped. |
+| Portable build | ⚠️ Crashed on the first hover (finding 6); fixed. After the fix, checked by hand only. |
+| Real apps' menus from our tray (13 icons) | ✅ All opened next to their icon and closed with Esc (checklist). |
+| Elevated Task Manager | ✅ Its 13 icons reach our tray and Explorer's; its callback message passes UIPI; our import picks it up. ⚠️ A click reached it (it took the foreground), but its minimized window did not restore (finding 9). |
+
+### Phase 6 findings
+
+1. **When Explorer's taskbar gets the foreground, it goes above our `Shell_TrayWnd`.** Measured with
+   `SpikeTool watch-zorder`: closing the volume flyout (opened from Explorer's tray) gave the taskbar the
+   foreground and the role for 50 ms; opening Open-Shell's Start menu for 215 ms and 14 ms, closing it
+   for 50 ms. ManagedShell's 100 ms check ends these gaps; its timer runs at Background priority, which
+   is how 215 ms happened. Explorer never kept its taskbar on top once ours was raised; Phase 1's "up
+   to about 2 s" was most likely several gaps within one tick of the 500 ms check that logs the role.
+   Every change of the top-level Z-order fires `EVENT_OBJECT_REORDER` on the desktop window, in the same
+   millisecond, so the tray reacts to that now.
+2. **How Explorer's tray treats hovering** (measured with the test app in Explorer's own tray):
+   - Version 0: WM_MOUSEMOVE when the pointer arrives (and again as the tooltip appears); the standard
+     tooltip after about 0.6 s; nothing when the pointer leaves.
+   - Version 4 without NIF_SHOWTIP: WM_MOUSEMOVE, then NIN_POPUPOPEN 500 ms later (the double-click
+     time), with the pointer's position; no tooltip (Explorer's tooltip window has the text but is 0×0);
+     NIN_POPUPCLOSE, with position 0,0, when the pointer leaves. A button press sends NIN_POPUPCLOSE
+     before the button's message, and the popup does not open again until the pointer comes back.
+   - Version 4 with NIF_SHOWTIP: the standard tooltip, and no NIN_POPUPOPEN at all.
+   - NIF_SHOWTIP counts from each NIM_ADD and NIM_MODIFY: a later tooltip change without it, and even
+     an icon change without it, turns the standard tooltip off. NIM_SETVERSION leaves it alone.
+   - Explorer sends no WM_MOUSEHOVER or WM_MOUSELEAVE. ManagedShell sent WM_MOUSEHOVER and NIN_POPUPOPEN
+     the moment the pointer arrived, and WM_MOUSELEAVE and NIN_POPUPCLOSE when it left, to every icon.
+   Every version 4 app on this machine (Windows Security, Google Drive, qBittorrent, Explorer's own
+   icons) sets NIF_SHOWTIP, so their tooltips look as before; they no longer get popup messages that
+   Explorer never sends them.
+3. **Explorer marks hidden icons with bit 0 of its per-icon state**, whether the app hid its icon
+   (state 0x400001) or Windows hides it (Meet Now: 0x200001). The import takes that bit as the icon's
+   hidden state, as ManagedShell's import did.
+4. **ManagedShell forwards the messages it rejects to "the other" `Shell_TrayWnd`**, which it finds by
+   skipping its own window. Until `CreateWindowEx` returns, it does not know its own window, and could
+   find itself (created topmost, it is already the highest), keep that as the forwarding target and
+   forward to itself from then on. So the import waits until ManagedShell creates its child window.
+5. **ManagedShell's `Initialize()` runs its import only while `IsAppRunningAsShell` is false**, and
+   starts the shell service objects (volume, network, power, in our process) only while it is true.
+   Setting the flag for the import and clearing it as our window is created skips one without the other.
+6. **ManagedShell uses WinForms, but its NuGet package declares only the WPF framework.** An app on
+   the installed .NET Desktop Runtime has WinForms anyway; a self-contained one does not, and crashed
+   (`FileNotFoundException: System.Windows.Forms` in `MouseHelper.GetCursorPositionParam`) the first
+   time the pointer reached an icon. `UseWindowsForms` in `FreeSystemTray.TrayHost` fixes it (+10 MB).
+7. **After an Explorer restart, Explorer's own icons are dead for about 1.5 s** before the new Explorer
+   registers them again (same GUIDs, new windows). Removing dead icons at once put them at the end of
+   the tray; GUID icons now get 10 s.
+8. **SMTO_ABORTIFHUNG does not cut a probe of our hidden `Shell_TrayWnd` short** once the tray thread
+   hangs: each probe took its full 5 s timeout. The watchdog probes again 1 s after an unanswered probe.
+9. **Task Manager registers 13 icons from one window**: the visible one (uID 0, CPU, memory, disk and
+   network in its tooltip) and 12 it hides itself (uIDs −1 to −12). The tray shows the visible one, as
+   Explorer does. Elevated, it sends its icon messages to our non-elevated host without trouble, and
+   its callback message passes UIPI from a non-elevated process while other messages are refused
+   (`SpikeTool notify`: 0x465 went through, 0x8765 gave error 5), so clicks from the tray reach it the
+   same way they reach it from Explorer (also not elevated). No option to run elevated is needed for
+   this. A click took it to the foreground, but its minimized window did not restore, after a click or
+   a double-click; I did not get a clean comparison with Explorer's tray, so whether that is Task
+   Manager's behaviour is open.
+10. **While an elevated window has the foreground, simulated input from a non-elevated process does
+    not arrive** (UIPI). One smoke-test run lost 15 mouse and keyboard checks that way, with Task
+    Manager left in the foreground by the test before; the next run passed.
+11. **Exit codes the watchdog sees:** an unhandled .NET exception 0xE0434352; Task Manager's End task
+    and `taskkill /f` 1; PowerShell's `Stop-Process` −1 (0xFFFFFFFF).
+12. **Google Drive's one-item menu opens below the pointer**, over Explorer's taskbar, rather than above
+    the icon; it does not look where the taskbar is. Every other app's menu opened above its icon.
+13. **ManagedShell ignores a NIM_DELETE that names an icon by its GUID alone** (window 0): its delete
+    matches the window and uID only. Seen in its source, not tested; the catch-up's deletes carry both.
+
+### Candidates for ManagedShell upstream
+
+Each would let us delete a workaround: reading Explorer's hidden-icons toolbar directly instead of
+switching "hide inactive icons" (finding 5 and Phase 0); declaring the WinForms framework in the
+package (finding 6); not forwarding before it knows its own window (finding 4); Explorer's hover
+behaviour (finding 2); GUID-only deletes (finding 13); and, from Phase 0, forwarding the messages it
+handles (mirroring).
+
+### Checklist of real apps
+
+From the tray's window, on this machine. Phase 0 used the spike; Phase 6 the finished app.
+
+| App | Icon | Phase 0 | Phase 6 |
+|---|---|---|---|
+| PowerToys | v0 | ✅ appears, right-click menu | ✅ menu above the icon |
+| PowerToys Awake | v0 | ✅ appears | ✅ menu |
+| Windows Command Palette | v0 | ✅ appears | ✅ menu (WinUI app, Win32 menu); a click and a double-click by mistake toggled its window |
+| Listary | v0 | ✅ menu | ✅ menu |
+| Launchy | v0 | ✅ Qt menu | ✅ Qt menu |
+| Directory Opus | v3, GUID | ✅ custom menu | ✅ its own popup menu |
+| qBittorrent | v4, NIF_SHOWTIP | not running | ✅ Qt menu |
+| Google Drive | v4, GUID, NIF_SHOWTIP | ✅ appears | ✅ one-item menu, below the pointer (finding 12) |
+| Windows Security | v4, GUID, NIF_SHOWTIP | ✅ menu | ✅ menu; restored by the full add after both Explorer restarts |
+| Explorer: volume, network, battery, Bluetooth | v4, GUID | ✅ menus and flyouts | ✅ menus; kept their places across Explorer restarts |
+| Explorer: Meet Now | v4, GUID | ⚠️ shown | ✅ hidden (Phase 5), imported as hidden |
+| Task Manager (elevated) | v0, 13 icons | not tested | ✅ icons, import, callback through UIPI; ⚠️ minimized window not restored by a click (finding 9) |
+| Discord | v0, GUID | ✅ Electron menu | not running this time |
+| TestTrayApp (v0, v4, v4 with NIF_SHOWTIP, several icons, ignoring TaskbarCreated) | | ✅ | ✅ smoke test and Explorer restart test |
+
+Not available here: Steam, Dropbox, an antivirus other than Windows Security, VPN clients, OEM tools
+with tray icons. Balloons were checked with the test app only (mirrored; Windows shows them as
+notifications); no real app showed one on demand.
+
+### Checking the portable build
+
+Not done by me after the fix (Claude Code's permission check refused it):
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools\Publish.ps1
+powershell -ExecutionPolicy Bypass -File tests\smoke\Invoke-SmokeTest.ps1 -Configuration Release -AppPath dist\FreeSystemTray-0.1.0-win-x64\FreeSystemTray.exe
+```
+
+Expected: all 107 checks pass, as with the Release build.
+
+### Not tested in Phase 6
+
+- The full smoke test on the portable build after the WinForms fix (above).
+- The watchdog at a real sign-out or shutdown (it checks `SM_SHUTTINGDOWN` before starting the tray
+  again), and a real crash in normal use.
+- Windows 11, multiple monitors and mixed DPI (as before).
+- Discord, Steam, Dropbox, VPN clients, other antivirus and OEM tray apps (not installed or not running).
+- A long run of the finished Phase 6 build.
+
+### Phase 6: side effects on this machine
+
+- **Your running FreeSystemTray** (the Debug build you started at 18:11) was closed with `--exit` at
+  18:46 for the tests, and started again with the new Debug build at the end of the session.
+- Explorer was restarted 4 times by the Explorer restart test (18:53 and 19:54, twice each), with no
+  File Explorer windows open. Each time the taskbar disappeared for a few seconds.
+- Explorer's volume flyout and Open-Shell's Start menu were opened once each and closed with Esc.
+- Explorer's hidden-icons flyout was opened a few times by the hover probes; Explorer's tray order may
+  have changed through its restarts (our own starts leave it alone).
+- The right-click menus of 13 real apps were opened from a test tray and closed with Esc. Windows
+  Command Palette's tray icon got a click and a double-click by mistake, twice (a position in
+  Explorer's closed flyout lies over the tray); its window ended hidden, as before.
+- **Task Manager was started, elevated and minimized, and is still open**: a non-elevated process
+  cannot close it. Please close it.
+- Simulated input as in earlier phases, always after 1.5 s without yours; test trays crashed and hung
+  on purpose; up to 14 test icons at a time, and more "TestTrayApp" entries in Windows' notification
+  icon history (uIDs 105 to 108, 201 to 204, 301 to 315, 401, 402, 499, 501); "Balloon from SmokeA"
+  notifications in Action Center, one per smoke run.
+- `dist\` (the portable build) was created in the repository folder; it is in `.gitignore`.
+- All test runs used settings and logs in temporary folders. `%LOCALAPPDATA%\FreeSystemTray` is yours
+  now; the tests did not write to it (the `--exit` that closed your instance logged elsewhere).
 
 ## Phase 5: management features
 
