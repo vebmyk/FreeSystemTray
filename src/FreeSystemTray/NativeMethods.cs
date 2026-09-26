@@ -33,6 +33,11 @@ namespace FreeSystemTray
         public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
         public const uint PM_NOREMOVE = 0x0000;
         public const uint GA_ROOT = 2;
+        public const uint MONITOR_DEFAULTTONEAREST = 2;
+        public const int HSHELL_WINDOWACTIVATED = 4;
+        public const int HSHELL_RUDEAPPACTIVATED = 0x8004;
+        public const int HSHELL_FULLSCREENENTER = 53;
+        public const int HSHELL_FULLSCREENEXIT = 54;
         public const int DWMWA_CLOAKED = 14;
         public const uint SYNCHRONIZE = 0x00100000;
         public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
@@ -129,7 +134,18 @@ namespace FreeSystemTray
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool IsZoomed(IntPtr hWnd);
+        public static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool RegisterShellHookWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeregisterShellHookWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);

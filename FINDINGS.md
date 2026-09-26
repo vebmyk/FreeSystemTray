@@ -88,13 +88,50 @@ window.
    broken). You turned it on during testing, and the animation results above were taken with it on.
    The app logs the animation it will use at startup ("Show/hide: ..., animation ...").
 
+### Phase 2 follow-up: full-screen apps
+
+Built after Phase 2, as decided on 2026-09-26 (PLAN.md, "Decisions"). Before it, the tray stayed above
+full-screen windows: `SpikeTool fullscreen-probe` showed the tray's pixels on top of a full-screen
+window while Explorer's taskbar had stepped back.
+
+**What it does.** While a full-screen window is the last window activated on the tray's monitor, the
+tray drops its always-on-top flag and sits directly below that window. Switching to another window
+on that monitor, or the full-screen window closing or leaving full screen, makes it always-on-top
+again; working on another monitor does not. The hotkey (or `--show`) brings it up over the
+full-screen window; the hotkey again, a click elsewhere, or activating the full-screen window sends
+it back behind (an auto-hiding tray hides instead). While it is covered, Explorer answers position
+queries, and the hotspot does not fire.
+
+| Check | Result |
+|---|---|
+| A new full-screen window (a game or video player) | ✅ The tray steps behind it within 10 ms of Windows' notification; the screen shows the full-screen window where the tray was. Always-on-top again when it closes. |
+| A normal window turning full screen without a change of foreground (F11) | ✅ Steps behind it, and back when it leaves full screen. |
+| Hotkey while behind | ✅ The tray shows over the full-screen window; the hotkey again or a click on the full-screen window puts it back behind. |
+| Smoke test | ✅ 6 new checks (52 in all). |
+
+Findings:
+
+1. **Windows tells shell hook windows about full screen.** A window registered with
+   `RegisterShellHookWindow` gets `FULLSCREENENTER` (53) and `FULLSCREENEXIT` (54) with the window's
+   handle, in both cases above, about 20 ms before Explorer sends its appbars `ABN_FULLSCREENAPP` and
+   drops its taskbar's always-on-top flag. `ABN_FULLSCREENAPP` also reached an appbar registered
+   through our tray host, but it names no window or monitor, so the tray uses the shell hook. The
+   shell hook's `RUDEAPPACTIVATED` is not a full-screen signal on Windows 10: it came for ordinary
+   activations too.
+2. **`HWND_TOP` cannot lift the tray over the foreground full-screen window.** From our (background)
+   process, `SetWindowPos(HWND_TOP)` left the Z-order unchanged. Making the tray always-on-top again
+   does lift it, so that is how the hotkey brings it up. Clicking the already-active full-screen
+   window activates nothing, so the click itself is what sends the tray back (the click-away hook).
+3. **Test pitfall:** a console program started hidden (`Start-Process -WindowStyle Hidden`) gets its
+   first normal window created hidden, and a window made visible later by changing its style is never
+   reported as activated. SpikeTool now shows its test windows explicitly; the tray also counts a
+   window entering full screen as activated if it is the foreground window.
+
+Not handled: a window that was already full screen when FreeSystemTray started is only noticed once
+it enters full screen again. Not tested: multiple monitors, real games and video players.
+
 ### Open points
 
-- **Full-screen apps.** In always-visible mode the tray is an always-on-top window, so it should stay
-  above full-screen videos and borderless games, where Explorer's taskbar steps back (Phase 1,
-  finding 6). Not tested; the hotspot at least does not fire over a full-screen window. Decided
-  2026-09-26 (PLAN.md, "Decisions"): drop the tray's always-on-top flag while a full-screen app is in
-  front on its monitor. Not built yet.
 - **Hiding under the pointer.** If the hotkey hides the tray while the pointer is on an icon, that
   app does not get the mouse-leave (`NIN_POPUPCLOSE` for version 4 icons) until the pointer moves
   over the tray again.
@@ -119,6 +156,8 @@ window.
   Center one more "Balloon from SmokeA" notification per smoke-test run.
 - `Ctrl+Alt+Shift+T` was registered by a PowerShell session for a few seconds to test a taken hotkey,
   then released.
+- Full-screen follow-up: SpikeTool covered the primary screen with a black (dark grey) window of its
+  own for 2 to 9 s at a time, about ten times, and registered a temporary appbar and shell hook window.
 - No Explorer restarts. All runs used settings and logs in temporary folders;
   `%LOCALAPPDATA%\FreeSystemTray` still does not exist. Explorer is the tray host, always-on-top.
 

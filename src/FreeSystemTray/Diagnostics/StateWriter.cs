@@ -53,6 +53,8 @@ namespace FreeSystemTray.Diagnostics
                 ["visible"] = _window.IsVisible,
                 ["shown"] = _window.ShowHide?.IsShown,
                 ["trayWindowVisible"] = _host.TrayWindowVisible,
+                ["topmost"] = (NativeMethods.GetWindowLong(_window.Handle, NativeMethods.GWL_EXSTYLE) & NativeMethods.WS_EX_TOPMOST) != 0,
+                ["behindFullScreen"] = _window.BehindFullScreen == IntPtr.Zero ? null : Hex(_window.BehindFullScreen),
                 ["autoHide"] = _window.ShowHide?.AutoHide,
                 ["hotkey"] = _window.ShowHide?.Hotkey?.ToString(),
                 ["hotspot"] = hotspot.IsEmpty ? null : new[] { hotspot.Left, hotspot.Top, hotspot.Width, hotspot.Height },

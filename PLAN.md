@@ -73,7 +73,7 @@ Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDIN
 - Built: a configurable global hotkey, a hotspot at a screen edge or corner of the tray's monitor, click-away (including switching to another window) and timed auto-hide, fade and slide animations (off when "Show animations in Windows" is off), and an always-visible mode (the default). A menu or flyout opened from one of the tray's icons keeps an auto-hiding tray shown. Also `--toggle`, `--show`, `--hide`, and live reload of `settings.json`.
 - Hidden means only the window is hidden: icons keep registering (smoke-tested), and while hidden Explorer answers icon-position queries, so menus and flyouts open at the taskbar.
 - Not as planned: fading needed the window to be per-pixel transparent (`AllowsTransparency`), which WPF allows only from creation. The window is now always that kind of window; see Phase 4.
-- **Decided, not built yet:** in always-visible mode the tray is an always-on-top window and should stay above full-screen videos and games, where Explorer's taskbar steps back (not tested). Drop the always-on-top flag while a full-screen app is in front on the tray's monitor, as Explorer does (see "Decisions"). The hotspot already ignores full-screen apps.
+- Follow-up (built): while a full-screen app is in front on the tray's monitor, the tray drops its always-on-top flag and stays behind it, as Explorer's taskbar does; the hotkey brings it up over it. Windows reports full-screen windows to shell hook windows (`FULLSCREENENTER`/`FULLSCREENEXIT`). See FINDINGS.md, "Phase 2 follow-up".
 - Not tested: multiple monitors and mixed DPI, non-Win32 menus of real apps (Discord, Qt apps) with auto-hide, a long run in auto-hide mode.
 
 ### Phase 3: Scaling
@@ -129,7 +129,7 @@ Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDIN
 ## Decisions
 - 2026-09-25: Keep Explorer's taskbar and tray as they are. Our tray is additive, and mirroring keeps Explorer's tray correct. Users who don't want every icon shown twice can use Windows' own settings: move icons to the hidden-icons area, or auto-hide the taskbar.
 - 2026-09-25: Use ManagedShell unmodified from NuGet, with no fork. Workarounds stay small and inside the `ITrayHost` implementation. Offering them upstream (for example a "forward handled messages" option) is optional; if one is accepted, delete our workaround.
-- 2026-09-26: While a full-screen app (video, game, slide show) is in front on the tray's monitor, the always-visible tray drops its always-on-top flag, as Explorer's taskbar does, and gets it back afterwards. Not built yet.
+- 2026-09-26: While a full-screen app (video, game, slide show) is in front on the tray's monitor, the tray drops its always-on-top flag, as Explorer's taskbar does, and gets it back afterwards. Built the same day.
 
 ## Deliverables
 Source repo with a README, build instructions, a sample theme set, `FINDINGS.md` from Phase 0 (done), the smoke test (`tests/smoke`, built on the Phase 0 test app and harness in `spike/`), and a short test checklist of the apps tested in Phase 0 (in `FINDINGS.md`) and Phase 6.

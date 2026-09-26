@@ -15,10 +15,13 @@
     - show/hide: --hide, --show and --toggle; icons keep registering while the window is hidden; a
       settings file edit applies while running; with -SkipMouse left out also the hotspot, the
       hotkey, click-away, the auto-hide timer, and a menu opened from the tray keeping it shown;
+    - with -SkipMouse left out: stepping behind a full-screen window (a new one, and one turning
+      full screen like F11) and the hotkey bringing the tray up over it;
     - hand-back on a graceful exit and after the process is killed (watchdog).
   The balloon check shows a real Windows notification ("Balloon from SmokeA").
   The mouse and keyboard checks move the real mouse and press the tray's hotkey (Ctrl+Alt+Shift+T)
-  and Esc. Before each one the test waits until nobody has touched mouse or keyboard for 1.5 s.
+  and Esc, and the full-screen checks cover the primary screen with a black window for up to 8 s.
+  Before each one the test waits until nobody has touched mouse or keyboard for 1.5 s.
 
   Tested on Windows 10 22H2 with "Always show all icons" off. FreeSystemTray must not be running.
   Exit code: the number of failed checks.
@@ -307,6 +310,32 @@ try {
     }
     Write-Settings '{ }'
     Check "switching auto-hide off shows the tray again" (Wait-Until { (Is-Shown $run) -and (Read-State $run).autoHide -eq $false } 5000) (Last-ShowHide $run)
+
+    # --- Full-screen apps: the tray steps behind them, as Explorer's taskbar does -------------
+    if (-not $SkipMouse) {
+        $w = (Read-State $run).window
+        $px = [int]$w[0] + [int]$w[2] - 3; $py = [int]$w[1] + 2   # a pixel of the tray's background
+        $trayColour = Tool pixel $px $py
+        function Behind { $s = Read-State $run; return [bool]($s.behindFullScreen -and -not $s.topmost -and -not $s.trayWindowVisible) }
+        function OnTop { $s = Read-State $run; return [bool](-not $s.behindFullScreen -and $s.topmost -and $s.trayWindowVisible) }
+        Idle
+        $fs = Start-Process -FilePath $tool -ArgumentList "fullscreen-window 8000" -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $OutDir "fullscreen.txt")
+        Check "a full-screen window in front: the tray steps behind it" ((Wait-Until { Behind } 3000) -and (Tool pixel $px $py) -ne $trayColour) "pixel $(Tool pixel $px $py), tray $trayColour"
+        if ($hotkey) {
+            Tool key ctrl+alt+shift+t | Out-Null
+            Check "the hotkey brings it up over the full-screen window" ((Wait-Until { (Read-State $run).topmost -and (Read-State $run).trayWindowVisible } 2000) -and
+                (Wait-Until { (Tool pixel $px $py) -eq $trayColour } 1000)) "pixel $(Tool pixel $px $py)"
+            Tool click 300 300 | Out-Null   # on the full-screen window, away from the tray
+            Check "a click on the full-screen window puts it back behind" (Wait-Until { Behind } 2000)
+        }
+        [void]$fs.WaitForExit(15000)
+        Check "once the full-screen window closes, the tray is always-on-top again" ((Wait-Until { OnTop } 3000) -and (Tool pixel $px $py) -eq $trayColour)
+        Idle
+        $fs = Start-Process -FilePath $tool -ArgumentList "fullscreen-window 4000 f11" -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $OutDir "fullscreen-f11.txt")
+        Check "a window that turns full screen (F11): the tray steps behind it" (Wait-Until { Behind } 3000)
+        Check "and is always-on-top again when that window leaves full screen" (Wait-Until { OnTop } 4000)
+        [void]$fs.WaitForExit(15000)
+    }
 
     # --- Graceful exit ----------------------------------------------------------------------
     Post "SmokeC" 1

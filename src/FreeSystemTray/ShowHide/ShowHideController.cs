@@ -22,10 +22,12 @@ namespace FreeSystemTray.ShowHide
 
     /// <summary>
     /// Shows and hides the tray window: the global hotkey, the hotspot, auto-hide (click-away and the
-    /// timer), commands from other instances, and the animations. Hiding only hides the window; the
-    /// tray host keeps running and icons keep registering. While the window is hidden,
-    /// <see cref="ITrayHost.TrayWindowVisible"/> is false, so Explorer answers position queries and
-    /// menus and flyouts open at the taskbar. Everything runs on the UI thread.
+    /// timer), commands from other instances, and the animations. It also steps the window behind a
+    /// full-screen app in front on its monitor, as Explorer's taskbar does. Hiding only hides the
+    /// window; the tray host keeps running and icons keep registering. While the window is hidden or
+    /// covered by a full-screen app, <see cref="ITrayHost.TrayWindowVisible"/> is false, so Explorer
+    /// answers position queries and menus and flyouts open at the taskbar. Everything runs on the UI
+    /// thread.
     /// </summary>
     internal sealed class ShowHideController : IDisposable
     {
@@ -36,12 +38,16 @@ namespace FreeSystemTray.ShowHide
         /// <summary>Registered message another instance posts to the tray window; wParam is a <see cref="ShowHideCommand"/>.</summary>
         public static readonly uint CommandMessage = NativeMethods.RegisterWindowMessage("FreeSystemTray.ShowHide");
 
+        /// <summary>What shell hook windows receive (RegisterShellHookWindow).</summary>
+        private static readonly uint ShellHookMessage = NativeMethods.RegisterWindowMessage("SHELLHOOK");
+
         private readonly TrayWindow _window;
         private readonly ITrayHost _host;
         private readonly Action<string> _log;
         private readonly bool _trace;
         private readonly AutoHidePolicy _policy = new();
         private readonly TrayInteraction _interaction = new();
+        private readonly FullScreenTracker _fullScreen = new();
         private readonly TrayAnimator _animator;
         private readonly DispatcherTimer _autoHideTimer;
         private readonly DispatcherTimer _hotspotTimer;
@@ -56,6 +62,11 @@ namespace FreeSystemTray.ShowHide
         private ShowCause _shownBy;
         private TimeSpan? _inHotspotSince;
         private bool _hotspotArmed;
+        private bool _shellHookRegistered;
+
+        /// <summary>Behind a full-screen window, but brought up over it (hotkey or --show) until it is activated again.</summary>
+        private bool _inFrontOfFullScreen;
+
         private bool _disposed;
 
         /// <param name="trace">Log every click, foreground change and menu the shell watcher reports (--verbose).</param>
@@ -88,7 +99,7 @@ namespace FreeSystemTray.ShowHide
         public bool CanShowAgain => _hotkeyRegistered || _settings.Hotspot != HotspotLocation.None;
 
         /// <summary>The hotspot's rectangle in physical pixels, empty if none (diagnostics).</summary>
-        public PixelRect HotspotZone => CurrentHotspot(out _);
+        public PixelRect HotspotZone => CurrentHotspot();
 
         /// <summary>
         /// Creates the window's handle, registers the hotkey and shows the window, or leaves it hidden
@@ -98,11 +109,14 @@ namespace FreeSystemTray.ShowHide
         {
             _hwnd = new WindowInteropHelper(_window).EnsureHandle();
             HwndSource.FromHwnd(_hwnd)?.AddHook(WndProc);
+            // Full-screen windows and activations, for stepping behind full-screen apps.
+            _shellHookRegistered = ShellHookMessage != 0 && NativeMethods.RegisterShellHookWindow(_hwnd);
+            if (!_shellHookRegistered) _log("RegisterShellHookWindow failed; the tray will not step behind full-screen apps");
+            NoteActivated(NativeMethods.GetForegroundWindow());
             ApplySettings(_settings, starting: true);
             if (_settings.AutoHide && CanShowAgain)
             {
                 _shown = false;
-                _host.TrayWindowVisible = false;
                 _log("Starting hidden (auto-hide)");
                 StartHotspotPolling();
             }
@@ -110,12 +124,19 @@ namespace FreeSystemTray.ShowHide
             {
                 _shown = true;
                 _shownBy = ShowCause.Startup;
-                _host.TrayWindowVisible = true;
                 _policy.Shown(ShowCause.Startup);
                 _window.Show();
                 UpdateWatchers();
             }
+            UpdateTrayWindowVisible();
         }
+
+        /// <summary>
+        /// Apps and Explorer see the tray window only while it is shown and not covered by a
+        /// full-screen window; otherwise Explorer answers their position queries.
+        /// </summary>
+        private void UpdateTrayWindowVisible() =>
+            _host.TrayWindowVisible = _shown && (_window.BehindFullScreen == IntPtr.Zero || _inFrontOfFullScreen);
 
         /// <summary>Applies changed settings (the grip menu, or the settings file edited while running).</summary>
         public void ApplySettings(ShowHideSettings settings) => ApplySettings(settings, starting: false);
@@ -149,21 +170,37 @@ namespace FreeSystemTray.ShowHide
 
         public void Toggle(ShowCause cause)
         {
-            if (_shown) Hide(cause.ToString().ToLowerInvariant());
-            else Show(cause);
+            string reason = cause.ToString().ToLowerInvariant();
+            bool behind = _window.BehindFullScreen != IntPtr.Zero;
+            // Behind a full-screen window the tray is shown but covered: bring it up over that window.
+            if (!_shown || (behind && !_inFrontOfFullScreen)) Show(cause);
+            // Brought up over it: always visible means back behind it, not hidden.
+            else if (behind && !_settings.AutoHide) SendBehindFullScreen(reason);
+            else Hide(reason);
         }
 
         public void Show(ShowCause cause)
         {
             if (_disposed) return;
+            bool explicitly = cause is ShowCause.Hotkey or ShowCause.Command or ShowCause.Menu;
             if (_shown)
             {
-                if (cause is ShowCause.Hotkey or ShowCause.Hotspot or ShowCause.Command) _window.BringToTop();
+                if (!explicitly) return;
+                _window.BringToTop();
+                if (_window.BehindFullScreen != IntPtr.Zero && !_inFrontOfFullScreen)
+                {
+                    // Over the full-screen window until the hotkey, a click elsewhere, or activating it again.
+                    _inFrontOfFullScreen = true;
+                    UpdateTrayWindowVisible();
+                    UpdateWatchers();
+                    _log($"Brought in front of the full-screen window ({Describe(cause)})");
+                }
                 return;
             }
             _shown = true;
             _shownBy = cause;
-            _host.TrayWindowVisible = true;
+            _inFrontOfFullScreen = _window.BehindFullScreen != IntPtr.Zero;
+            UpdateTrayWindowVisible();
             _hotspotTimer.Stop();
             _interaction.Reset();
             _policy.Shown(cause);
@@ -191,7 +228,8 @@ namespace FreeSystemTray.ShowHide
                 return;
             }
             _shown = false;
-            _host.TrayWindowVisible = false;
+            _inFrontOfFullScreen = false;
+            UpdateTrayWindowVisible();
             UpdateWatchers();
             _animator.Run(0, AnimationKind(), AnimationDuration(), _window.Edge, () =>
             {
@@ -200,6 +238,17 @@ namespace FreeSystemTray.ShowHide
                 StartHotspotPolling();
             });
             _log($"Hidden ({reason})");
+        }
+
+        /// <summary>Puts a tray that was brought up over a full-screen window back behind it.</summary>
+        private void SendBehindFullScreen(string reason)
+        {
+            if (!_inFrontOfFullScreen || _window.BehindFullScreen == IntPtr.Zero) return;
+            _window.SetBehindFullScreen(_window.BehindFullScreen);
+            _inFrontOfFullScreen = false;
+            UpdateTrayWindowVisible();
+            UpdateWatchers();
+            _log($"Back behind the full-screen window ({reason})");
         }
 
         /// <summary>A mouse button went down or up on one of the tray's icons.</summary>
@@ -222,8 +271,90 @@ namespace FreeSystemTray.ShowHide
                     default: Toggle(ShowCause.Command); break;
                 }
             }
+            else if (msg == ShellHookMessage && ShellHookMessage != 0)
+            {
+                OnShellHook((int)wParam.ToInt64(), lParam);
+            }
+            else if (msg == NativeMethods.WM_DISPLAYCHANGE)
+            {
+                UpdateFullScreen(); // the tray may be on another monitor now
+            }
             return IntPtr.Zero;
         }
+
+        #endregion
+
+        #region Full-screen apps
+
+        /// <summary>
+        /// Shell hook messages (RegisterShellHookWindow). Windows 8 and later report windows entering
+        /// and leaving full screen, with the same judgement that makes Explorer's taskbar step back.
+        /// </summary>
+        private void OnShellHook(int code, IntPtr window)
+        {
+            switch (code)
+            {
+                case NativeMethods.HSHELL_FULLSCREENENTER:
+                    _fullScreen.Entered(window);
+                    // In case its activation was not reported (a window made visible without being shown).
+                    if (window == NativeMethods.GetForegroundWindow()) NoteActivated(window);
+                    if (_trace) _log($"SHOWHIDE full screen entered by {DescribeWindow(window)}");
+                    break;
+                case NativeMethods.HSHELL_FULLSCREENEXIT:
+                    _fullScreen.Exited(window);
+                    if (_trace) _log($"SHOWHIDE full screen left by 0x{window.ToInt64():X}");
+                    break;
+                case NativeMethods.HSHELL_WINDOWACTIVATED:
+                case NativeMethods.HSHELL_RUDEAPPACTIVATED:
+                    bool noted = NoteActivated(window);
+                    if (_trace) _log($"SHOWHIDE activated {DescribeWindow(window)}{(noted ? "" : " (ignored: ours or always-on-top)")}");
+                    if (!noted) return;
+                    break;
+                default:
+                    return;
+            }
+            UpdateFullScreen();
+        }
+
+        /// <summary>
+        /// Always-on-top windows (flyouts, menus, Explorer's taskbar) and the tray's own windows (its
+        /// menu takes the foreground) are left out: opening one over a full-screen app changes nothing.
+        /// </summary>
+        private bool NoteActivated(IntPtr window)
+        {
+            if (window == IntPtr.Zero || IsOurs(window) || IsTopmost(window)) return false;
+            _fullScreen.Activated(window);
+            return true;
+        }
+
+        /// <summary>Steps behind the full-screen window in front on the tray's monitor, or comes back on top.</summary>
+        private void UpdateFullScreen()
+        {
+            if (_disposed) return;
+            IntPtr trayMonitor = NativeMethods.MonitorFromWindow(_hwnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            // A hidden window (an app's message window taking the foreground for its menu) is on no
+            // monitor in particular: activating it ends any full screen.
+            IntPtr inFront = _fullScreen.InFront(NativeMethods.IsWindow,
+                w => !NativeMethods.IsWindowVisible(w) || NativeMethods.MonitorFromWindow(w, NativeMethods.MONITOR_DEFAULTTONEAREST) == trayMonitor,
+                NativeMethods.IsIconic);
+            IntPtr before = _window.BehindFullScreen;
+            if (inFront == IntPtr.Zero && before == IntPtr.Zero) return;
+            // Also when it is the same window: activated again, it covers the tray again.
+            _window.SetBehindFullScreen(inFront);
+            _inFrontOfFullScreen = false;
+            UpdateTrayWindowVisible();
+            UpdateWatchers();
+            if (inFront != before)
+                _log(inFront == IntPtr.Zero ? "No full-screen window in front any more; always-on-top again"
+                    : $"Full-screen window in front on the tray's monitor: {DescribeWindow(inFront)}; staying behind it");
+        }
+
+        private static bool IsTopmost(IntPtr hwnd) =>
+            (NativeMethods.GetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE) & NativeMethods.WS_EX_TOPMOST) != 0;
+
+        #endregion
+
+        #region Hotkey
 
         private void RegisterHotkey(string? text)
         {
@@ -278,7 +409,8 @@ namespace FreeSystemTray.ShowHide
         {
             bool autoHiding = _shown && !_disposed && _settings.AutoHide && CanShowAgain;
             bool timer = autoHiding && _policy.HideDelay > TimeSpan.Zero;
-            bool clickAway = autoHiding && _settings.HideOnClickAway;
+            // A tray brought up over a full-screen window goes back behind it on a click elsewhere.
+            bool clickAway = (autoHiding && _settings.HideOnClickAway) || (_shown && !_disposed && _inFrontOfFullScreen);
 
             if (timer) _autoHideTimer.Start();
             else _autoHideTimer.Stop();
@@ -306,7 +438,7 @@ namespace FreeSystemTray.ShowHide
             if (!_shown || !NativeMethods.GetCursorPos(out NativeMethods.POINT p)) return;
             var cursor = new PixelPoint(p.X, p.Y);
             bool onTray = _window.ScreenBounds.Contains(cursor) ||
-                          (_shownBy == ShowCause.Hotspot && CurrentHotspot(out _).Contains(cursor));
+                          (_shownBy == ShowCause.Hotspot && CurrentHotspot().Contains(cursor));
             // Not "our window has the foreground": it keeps it after its own menu closes (IsBusy covers the menu).
             bool inUse = _window.IsBusy || _interaction.IsOpen(NativeMethods.GetForegroundWindow(), IsOpenMenu, IsPopup);
             if (_policy.HideOnTimer(ShellWatcher.Now(), onTray, inUse))
@@ -320,8 +452,9 @@ namespace FreeSystemTray.ShowHide
             // Our windows include the tray's own menu and tooltips.
             bool ours = IsOurs(root), fromTray = !ours && _interaction.Owns(root, IsPopup);
             if (_trace) _log($"SHOWHIDE click at {point.X},{point.Y} on {DescribeWindow(root)}: {(ours ? "ours" : fromTray ? "opened from the tray" : "away")}");
-            if (ours || fromTray || !_shown || !_policy.HidesOnClickAway) return;
-            Hide($"click away at {point.X},{point.Y} on {DescribeWindow(root)}");
+            if (ours || fromTray || !_shown) return;
+            if (_policy.HidesOnClickAway) Hide($"click away at {point.X},{point.Y} on {DescribeWindow(root)}");
+            else SendBehindFullScreen($"click at {point.X},{point.Y} on {DescribeWindow(root)}");
         }
 
         private void OnForeground(ShellWatcher source, IntPtr window, TimeSpan at)
@@ -375,7 +508,7 @@ namespace FreeSystemTray.ShowHide
             }
             // The pointer must leave the hotspot first if it is there already (for example after the
             // hotkey hid a tray the hotspot had shown).
-            _hotspotArmed = !(NativeMethods.GetCursorPos(out NativeMethods.POINT p) && CurrentHotspot(out _).Contains(new PixelPoint(p.X, p.Y)));
+            _hotspotArmed = !(NativeMethods.GetCursorPos(out NativeMethods.POINT p) && CurrentHotspot().Contains(new PixelPoint(p.X, p.Y)));
             _inHotspotSince = null;
             _hotspotTimer.Start();
         }
@@ -388,7 +521,7 @@ namespace FreeSystemTray.ShowHide
                 return;
             }
             if (!NativeMethods.GetCursorPos(out NativeMethods.POINT p)) return;
-            PixelRect zone = CurrentHotspot(out PixelRect monitor);
+            PixelRect zone = CurrentHotspot();
             if (!zone.Contains(new PixelPoint(p.X, p.Y)))
             {
                 _hotspotArmed = true;
@@ -403,37 +536,23 @@ namespace FreeSystemTray.ShowHide
             _hotspotArmed = false;
             _inHotspotSince = null;
             // Like Explorer's auto-hidden taskbar: not over a full-screen game or video.
-            if (ForegroundCovers(monitor))
+            if (_window.BehindFullScreen != IntPtr.Zero)
             {
-                _log($"Hotspot reached, but a full-screen window is in front ({DescribeWindow(NativeMethods.GetForegroundWindow())}); not showing");
+                _log($"Hotspot reached, but a full-screen window is in front ({DescribeWindow(_window.BehindFullScreen)}); not showing");
                 return;
             }
             Show(ShowCause.Hotspot);
         }
 
         /// <summary>The hotspot on the tray's monitor, in physical pixels (empty if none is set).</summary>
-        private PixelRect CurrentHotspot(out PixelRect monitorBounds)
+        private PixelRect CurrentHotspot()
         {
-            monitorBounds = default;
             if (_settings.Hotspot == HotspotLocation.None) return default;
             var monitors = Monitors.GetAll();
             if (monitors.Count == 0) return default;
             PixelRect tray = _window.ScreenBounds;
             MonitorInfo monitor = tray.IsEmpty ? monitors[0] : PlacementMath.MonitorFor(tray, monitors);
-            monitorBounds = monitor.Bounds;
             return Hotspot.Zone(_settings.Hotspot, monitor.Bounds, VisualTreeHelper.GetDpi(_window).DpiScaleX);
-        }
-
-        /// <summary>
-        /// A full-screen game, video or slide show in front on that monitor. A maximized window covers
-        /// the whole monitor too when the taskbar auto-hides, so maximized windows do not count.
-        /// </summary>
-        private static bool ForegroundCovers(PixelRect monitor)
-        {
-            IntPtr fg = NativeMethods.GetForegroundWindow();
-            if (fg == IntPtr.Zero || NativeMethods.IsZoomed(fg) || !NativeMethods.GetWindowRect(fg, out NativeMethods.RECT r)) return false;
-            if (ClassOf(fg) is "Progman" or "WorkerW") return false; // the desktop covers the monitor too
-            return new PixelRect(r.Left, r.Top, r.Right, r.Bottom).Contains(monitor);
         }
 
         #endregion
@@ -472,6 +591,7 @@ namespace FreeSystemTray.ShowHide
             _animator.Stop();
             StopWatcher();
             UnregisterHotkey();
+            if (_shellHookRegistered) NativeMethods.DeregisterShellHookWindow(_hwnd);
         }
     }
 }

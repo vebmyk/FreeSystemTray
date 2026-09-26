@@ -173,6 +173,75 @@ namespace FreeSystemTray.Tests
         }
     }
 
+    public class FullScreenTrackerTests
+    {
+        private static readonly IntPtr Video = new(0x10), Browser = new(0x20), OtherMonitorApp = new(0x30), Gone = new(0x40);
+        private readonly HashSet<IntPtr> _minimized = new();
+        private readonly FullScreenTracker _t = new();
+
+        private IntPtr InFront() => _t.InFront(w => w != Gone, w => w != OtherMonitorApp, w => _minimized.Contains(w));
+
+        [Fact]
+        public void Nothing_is_in_front_until_a_full_screen_window_is_active() => Assert.Equal(IntPtr.Zero, InFront());
+
+        [Fact]
+        public void An_active_full_screen_window_is_in_front_whichever_is_reported_first()
+        {
+            _t.Activated(Video);
+            _t.Entered(Video);
+            Assert.Equal(Video, InFront());
+
+            var t2 = new FullScreenTracker();
+            t2.Entered(Browser);
+            t2.Activated(Browser);
+            Assert.Equal(Browser, t2.InFront(_ => true, _ => true, _ => false));
+        }
+
+        [Fact]
+        public void A_window_that_turns_full_screen_while_active_is_in_front_and_not_after_it_leaves_full_screen()
+        {
+            _t.Activated(Browser);
+            Assert.Equal(IntPtr.Zero, InFront());
+            _t.Entered(Browser); // F11
+            Assert.Equal(Browser, InFront());
+            _t.Exited(Browser);
+            Assert.Equal(IntPtr.Zero, InFront());
+        }
+
+        [Fact]
+        public void Switching_to_another_window_on_the_same_monitor_ends_it_and_switching_back_restores_it()
+        {
+            _t.Activated(Video);
+            _t.Entered(Video);
+            _t.Activated(Browser);
+            Assert.Equal(IntPtr.Zero, InFront());
+            _t.Activated(Video);
+            Assert.Equal(Video, InFront());
+        }
+
+        [Fact]
+        public void Working_on_another_monitor_does_not_end_it()
+        {
+            _t.Activated(Video);
+            _t.Entered(Video);
+            _t.Activated(OtherMonitorApp);
+            Assert.Equal(Video, InFront());
+        }
+
+        [Fact]
+        public void A_minimized_or_closed_full_screen_window_is_not_in_front()
+        {
+            _t.Activated(Video);
+            _t.Entered(Video);
+            _minimized.Add(Video);
+            Assert.Equal(IntPtr.Zero, InFront());
+
+            _t.Activated(Gone);
+            _t.Entered(Gone);
+            Assert.Equal(IntPtr.Zero, InFront()); // gone: the next window back, the minimized video, is not in front either
+        }
+    }
+
     public class TrayInteractionTests
     {
         private static readonly IntPtr Menu = new(0x100), SubMenu = new(0x200), Flyout = new(0x300), AppWindow = new(0x400);

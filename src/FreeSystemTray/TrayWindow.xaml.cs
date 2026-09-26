@@ -36,6 +36,7 @@ namespace FreeSystemTray
         private bool _boundsQueued;
         private PixelRect _reportedBounds;
         private ScreenEdge _reportedEdge = ScreenEdge.Bottom;
+        private IntPtr _behind;
         private bool _gripMenuOpen;
         private bool _dragging;
         private PixelPoint _dragStartCursor;
@@ -90,12 +91,39 @@ namespace FreeSystemTray
             ApplyPlacement();
         }
 
-        /// <summary>Puts the window on top of the other always-on-top windows, without activating it.</summary>
+        /// <summary>
+        /// Puts the window on top of the other always-on-top windows, without activating it. Behind a
+        /// full-screen window this brings it up over that window (HWND_TOP would not: a window of a
+        /// background process cannot go above the foreground window that way), until
+        /// <see cref="SetBehindFullScreen"/> puts it back.
+        /// </summary>
         internal void BringToTop()
         {
-            if (_hwnd != IntPtr.Zero)
-                NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
-                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+            if (_hwnd == IntPtr.Zero) return;
+            Topmost = true;
+            NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        }
+
+        /// <summary>The full-screen window the tray stays behind, or zero while it is always-on-top.</summary>
+        internal IntPtr BehindFullScreen => _behind;
+
+        /// <summary>
+        /// Steps behind a full-screen window: no longer always-on-top, and directly below that window
+        /// in the Z-order, as Explorer's taskbar does. Zero makes it always-on-top again.
+        /// </summary>
+        internal void SetBehindFullScreen(IntPtr fullScreenWindow)
+        {
+            if (_hwnd == IntPtr.Zero) return;
+            _behind = fullScreenWindow;
+            if (fullScreenWindow == IntPtr.Zero)
+            {
+                Topmost = true; // SetWindowPos(HWND_TOPMOST)
+                return;
+            }
+            Topmost = false; // HWND_NOTOPMOST: the top of the ordinary windows, still above the full-screen one
+            NativeMethods.SetWindowPos(_hwnd, fullScreenWindow, 0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
         }
 
         /// <summary>Reports the window's and icons' positions to the host again (after the show animation moved them).</summary>
@@ -169,7 +197,9 @@ namespace FreeSystemTray
             var size = new PixelSize((int)Math.Ceiling(content.Width * dpi.DpiScaleX), (int)Math.Ceiling(content.Height * dpi.DpiScaleY));
             if (size.Width <= 0 || size.Height <= 0) return;
             PixelRect rect = PlacementMath.Place(_settings.Position, size, Monitors.GetAll());
-            NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, rect.Left, rect.Top, rect.Width, rect.Height, NativeMethods.SWP_NOACTIVATE);
+            // Behind a full-screen window (or brought up over it), keep the Z-order; otherwise make sure it is always-on-top.
+            NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, rect.Left, rect.Top, rect.Width, rect.Height,
+                NativeMethods.SWP_NOACTIVATE | (_behind != IntPtr.Zero ? NativeMethods.SWP_NOZORDER : 0));
             QueueBoundsReport();
         }
 

@@ -24,6 +24,12 @@ namespace SpikeTool
     ///                             exit code 3 if that did not happen within TIMEOUT ms (default 60000)
     ///   click-target X Y [left|right]  show a window of our own at X,Y (120x60, never activated),
     ///                             click it, close it: a harmless place to click "somewhere else"
+    ///   fullscreen-probe [X Y]    show a full-screen window, then turn a normal window full screen, on
+    ///                             the primary monitor (1.5 s each); log the shell hook's and Explorer's
+    ///                             appbar notifications, Explorer's topmost flag, and the colour at X,Y
+    ///   fullscreen-window MS [f11]  a full-screen window on the primary monitor for MS milliseconds; with
+    ///                             f11, a normal window that turns full screen for most of that time
+    ///   pixel X Y                 the colour on screen at X,Y (#RRGGBB)
     ///   post "WINDOW TITLE" N     PostMessage(WM_APP+N)
     ///   taskbarcreated [HWND]     broadcast the TaskbarCreated message (or post it to one window)
     ///   appbar                    what apps see from the tray host: ABM_GETTASKBARPOS, ABM_GETSTATE,
@@ -58,6 +64,16 @@ namespace SpikeTool
                     case "idle": Console.WriteLine($"idle {IdleMs()} ms"); break;
                     case "wait-idle": return WaitIdle(I(args[1]), args.Length > 2 ? I(args[2]) : 60_000);
                     case "click-target": ClickTarget(I(args[1]), I(args[2]), args.Length > 3 ? args[3] : "left"); break;
+                    case "fullscreen-probe": FullScreenProbe(args); break;
+                    case "fullscreen-window": FullScreenWindow(I(args[1]), args.Length > 2 && args[2] == "f11"); break;
+                    case "pixel":
+                    {
+                        IntPtr dc = W.GetDC(IntPtr.Zero);
+                        uint c = W.GetPixel(dc, I(args[1]), I(args[2]));
+                        W.ReleaseDC(IntPtr.Zero, dc);
+                        Console.WriteLine($"#{c & 0xFF:X2}{(c >> 8) & 0xFF:X2}{(c >> 16) & 0xFF:X2}"); // COLORREF is 0x00BBGGRR
+                        break;
+                    }
                     case "post": Post(args[1], I(args[2])); break;
                     case "replay-add": ReplayAdd(args); break;
                     case "taskbarcreated":
@@ -553,6 +569,147 @@ namespace SpikeTool
             }
         }
 
+        /// <summary>
+        /// What tells an app that a full-screen window is in front: the shell hook (RUDEAPPACTIVATED,
+        /// FULLSCREENENTER/EXIT) and Explorer's appbar notification ABN_FULLSCREENAPP. Shows two kinds
+        /// of full-screen window on the primary monitor for a few seconds each: a new one (a game or
+        /// video player) and a normal window that turns full screen without a change of foreground
+        /// (F11 in a browser). Also logs whether Explorer's taskbar is always-on-top at each step, and
+        /// the colour at a point given as X Y (for example over the tray window).
+        /// </summary>
+        private static void FullScreenProbe(string[] a)
+        {
+            int px = a.Length > 2 ? I(a[1]) : -1, py = a.Length > 2 ? I(a[2]) : -1;
+            const int WS_POPUP = unchecked((int)0x80000000), WS_VISIBLE = 0x10000000, WS_OVERLAPPEDWINDOW = 0x00CF0000, SS_BLACKRECT = 0x4;
+            int shellHook = W.RegisterWindowMessage("SHELLHOOK");
+            int appBarMsg = W.RegisterWindowMessage("SpikeTool.FullScreenProbe");
+            var sw = Stopwatch.StartNew();
+            var log = new List<string>();
+            void Note(string s) => log.Add($"{sw.ElapsedMilliseconds,6} ms  {s}");
+            string State()
+            {
+                IntPtr fg = W.GetForegroundWindow();
+                IntPtr explorer = ExplorerTrayWnd();
+                string pixel = "";
+                if (px >= 0)
+                {
+                    IntPtr dc = W.GetDC(IntPtr.Zero);
+                    pixel = $", pixel at {px},{py} = 0x{W.GetPixel(dc, px, py):X6}";
+                    W.ReleaseDC(IntPtr.Zero, dc);
+                }
+                return $"foreground {Describe(fg)}, Explorer's taskbar topmost={(W.GetWindowLong(explorer, -20) & 8) != 0}{pixel}";
+            }
+
+            IntPtr listener = W.CreateWindowEx(0x80, "STATIC", "SpikeTool full-screen probe", WS_POPUP, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            IntPtr original = IntPtr.Zero;
+            W.WndProc proc = (h, m, wp, lp) =>
+            {
+                if (m == shellHook)
+                {
+                    int code = (int)wp.ToInt64();
+                    string name = code switch { 4 => "WINDOWACTIVATED", 0x8004 => "RUDEAPPACTIVATED", 53 => "FULLSCREENENTER", 54 => "FULLSCREENEXIT", 16 => "MONITORCHANGED", _ => null! };
+                    if (name != null) Note($"SHELLHOOK {name} {Describe(lp)}");
+                }
+                else if (m == appBarMsg)
+                {
+                    Note($"APPBAR ABN={wp.ToInt64()}{(wp.ToInt64() == 2 ? " (ABN_FULLSCREENAPP)" : "")} lParam={lp.ToInt64()}");
+                }
+                return W.CallWindowProc(original, h, m, wp, lp);
+            };
+            original = W.SetWindowLongPtr(listener, -4, Marshal.GetFunctionPointerForDelegate(proc));
+            Console.WriteLine($"RegisterShellHookWindow -> {W.RegisterShellHookWindow(listener)}; tray host {Describe(W.FindWindow("Shell_TrayWnd", null))}");
+            var abd = new W.APPBARDATA { cbSize = Marshal.SizeOf<W.APPBARDATA>(), hWnd = listener, uCallbackMessage = (uint)appBarMsg };
+            Console.WriteLine($"ABM_NEW -> {(ulong)W.SHAppBarMessage(0, ref abd)}");
+            W.RECT m = PrimaryMonitor();
+            try
+            {
+                Pump(500);
+                Note("start: " + State());
+
+                IntPtr fs = W.CreateWindowEx(0, "STATIC", "SpikeTool full screen", WS_POPUP | WS_VISIBLE | SS_BLACKRECT,
+                    m.Left, m.Top, m.Right - m.Left, m.Bottom - m.Top, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                Note($"new full-screen window {Describe(fs)} shown; SetForegroundWindow -> {W.SetForegroundWindow(fs)}");
+                Pump(1500);
+                Note("after 1.5 s: " + State());
+                W.DestroyWindow(fs);
+                Note("full-screen window closed");
+                Pump(1500);
+                Note("after 1.5 s: " + State());
+
+                IntPtr win = W.CreateWindowEx(0, "STATIC", "SpikeTool window", WS_OVERLAPPEDWINDOW | WS_VISIBLE | SS_BLACKRECT,
+                    m.Left + 200, m.Top + 200, 400, 300, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                Note($"normal window {Describe(win)} shown; SetForegroundWindow -> {W.SetForegroundWindow(win)}");
+                Pump(1000);
+                Note("after 1 s: " + State());
+                W.SetWindowLongPtr(win, -16, (IntPtr)(WS_POPUP | WS_VISIBLE | SS_BLACKRECT));
+                W.SetWindowPos(win, IntPtr.Zero, m.Left, m.Top, m.Right - m.Left, m.Bottom - m.Top, 0x0020 /*FRAMECHANGED*/ | 0x0004 /*NOZORDER*/);
+                Note("same window made full screen (F11)");
+                Pump(1500);
+                Note("after 1.5 s: " + State());
+                W.SetWindowLongPtr(win, -16, (IntPtr)(WS_OVERLAPPEDWINDOW | WS_VISIBLE | SS_BLACKRECT));
+                W.SetWindowPos(win, IntPtr.Zero, m.Left + 200, m.Top + 200, 400, 300, 0x0020 | 0x0004);
+                Note("back to a normal window");
+                Pump(1500);
+                Note("after 1.5 s: " + State());
+                W.DestroyWindow(win);
+                Pump(500);
+                Note("end: " + State());
+            }
+            finally
+            {
+                Console.WriteLine($"ABM_REMOVE -> {(ulong)W.SHAppBarMessage(1, ref abd)}");
+                W.DeregisterShellHookWindow(listener);
+                W.SetWindowLongPtr(listener, -4, original);
+                W.DestroyWindow(listener);
+                GC.KeepAlive(proc);
+            }
+            foreach (string line in log) Console.WriteLine(line);
+        }
+
+        /// <summary>
+        /// A full-screen window on the primary monitor for MS milliseconds, like a game or a video
+        /// player. With "f11": a normal window that turns full screen after 1 s without a change of
+        /// foreground, and back to normal 1 s before it closes, like F11 in a browser.
+        /// </summary>
+        private static void FullScreenWindow(int ms, bool f11)
+        {
+            const int WS_POPUP = unchecked((int)0x80000000), WS_VISIBLE = 0x10000000, WS_OVERLAPPEDWINDOW = 0x00CF0000, SS_BLACKRECT = 0x4;
+            W.RECT m = PrimaryMonitor();
+            var sw = Stopwatch.StartNew();
+            IntPtr h = f11
+                ? W.CreateWindowEx(0, "STATIC", "SpikeTool window", WS_OVERLAPPEDWINDOW | WS_VISIBLE | SS_BLACKRECT, m.Left + 200, m.Top + 200, 400, 300, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero)
+                : W.CreateWindowEx(0, "STATIC", "SpikeTool full screen", WS_POPUP | WS_VISIBLE | SS_BLACKRECT, m.Left, m.Top, m.Right - m.Left, m.Bottom - m.Top, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            // A process's first ShowWindow follows how it was started (a hidden start would hide the
+            // window), so show it twice.
+            W.ShowWindow(h, 5);
+            W.ShowWindow(h, 5);
+            Console.WriteLine($"{sw.ElapsedMilliseconds,6} ms  {(f11 ? "normal" : "full-screen")} window {Describe(h)}; SetForegroundWindow -> {W.SetForegroundWindow(h)}");
+            try
+            {
+                if (f11)
+                {
+                    Pump(1000);
+                    W.SetWindowLongPtr(h, -16, (IntPtr)(WS_POPUP | WS_VISIBLE | SS_BLACKRECT));
+                    W.SetWindowPos(h, IntPtr.Zero, m.Left, m.Top, m.Right - m.Left, m.Bottom - m.Top, 0x0020 | 0x0004); // FRAMECHANGED | NOZORDER
+                    Console.WriteLine($"{sw.ElapsedMilliseconds,6} ms  made full screen");
+                    Pump(Math.Max(0, ms - 2000));
+                    W.SetWindowLongPtr(h, -16, (IntPtr)(WS_OVERLAPPEDWINDOW | WS_VISIBLE | SS_BLACKRECT));
+                    W.SetWindowPos(h, IntPtr.Zero, m.Left + 200, m.Top + 200, 400, 300, 0x0020 | 0x0004);
+                    Console.WriteLine($"{sw.ElapsedMilliseconds,6} ms  back to a normal window");
+                    Pump(1000);
+                }
+                else
+                {
+                    Pump(ms);
+                }
+            }
+            finally
+            {
+                W.DestroyWindow(h);
+                Console.WriteLine($"{sw.ElapsedMilliseconds,6} ms  closed");
+            }
+        }
+
         private static void IconRect(string[] a)
         {
             var id = new W.NOTIFYICONIDENTIFIER
@@ -719,6 +876,17 @@ namespace SpikeTool
         [StructLayout(LayoutKind.Sequential)]
         public struct MSG { public IntPtr hwnd; public int message; public IntPtr wParam, lParam; public uint time; public POINT pt; }
 
+        public delegate IntPtr WndProc(IntPtr h, int msg, IntPtr w, IntPtr l);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
+        [DllImport("user32.dll", EntryPoint = "CallWindowProcW")] public static extern IntPtr CallWindowProc(IntPtr prev, IntPtr h, int msg, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] public static extern bool RegisterShellHookWindow(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool DeregisterShellHookWindow(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+        [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
+        [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
+        [DllImport("gdi32.dll")] public static extern uint GetPixel(IntPtr dc, int x, int y);
         [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
         [DllImport("user32.dll")] public static extern bool PeekMessage(out MSG msg, IntPtr h, uint min, uint max, uint remove);

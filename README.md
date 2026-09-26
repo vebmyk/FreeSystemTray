@@ -47,6 +47,9 @@ hidden their menus and flyouts open at Explorer's taskbar.
   been over the tray, so it does not vanish before you get there.
 - The **hotspot** is an edge or a corner of the tray's monitor: rest the pointer there for
   `hotspotDelayMs` and the tray appears. It does not fire while a full-screen game or video is in front.
+- **Full-screen apps** (videos, games, slide shows) cover the tray, as they cover Explorer's taskbar:
+  while one is the active window on the tray's monitor, the tray is not always-on-top. The hotkey
+  brings it up over the app; the hotkey again or a click on the app puts it back.
 - The tray never hides by itself, and **Hide** is greyed out, when nothing could bring it back (no
   working hotkey and no hotspot).
 - Show and hide fade or slide unless "Show animations in Windows" is off.
@@ -107,17 +110,18 @@ each workaround is needed.
 Run it before every ManagedShell upgrade and after changes to the tray host or the show/hide code. It
 builds the solution, starts four test tray icons and the app, and checks mirroring, the fix-ups, the
 query answers, clicks, showing and hiding (commands, the hidden state, a settings edit, hotspot,
-hotkey, click-away, the timer, a menu keeping the tray shown), and the hand-back to Explorer after an
-exit and after a kill (46 checks).
+hotkey, click-away, the timer, a menu keeping the tray shown), stepping behind full-screen windows,
+and the hand-back to Explorer after an exit and after a kill (52 checks).
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-SmokeTest.ps1
 ```
 
-For about a minute it moves the mouse, clicks the test icons and a small window of its own, and
-presses the hotkey and Esc; before each step it waits until mouse and keyboard have been left alone
-for 1.5 s. `-SkipMouse` leaves those checks out. It also shows one Windows notification from the
-balloon check. FreeSystemTray must not be running. The exit code is the number of failed checks.
+For about a minute it moves the mouse, clicks the test icons and windows of its own, presses the
+hotkey and Esc, and twice covers the primary screen with a full-screen window of its own for a few
+seconds; before each step it waits until mouse and keyboard have been left alone for 1.5 s.
+`-SkipMouse` leaves those checks out. It also shows one Windows notification from the balloon check.
+FreeSystemTray must not be running. The exit code is the number of failed checks.
 
 ## Layout
 
