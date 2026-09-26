@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -7,6 +8,7 @@ using FreeSystemTray.Diagnostics;
 using FreeSystemTray.Logging;
 using FreeSystemTray.Settings;
 using FreeSystemTray.ShowHide;
+using FreeSystemTray.Theming;
 using FreeSystemTray.TrayHost;
 using ManagedShell.Common.Logging;
 using Microsoft.Win32;
@@ -22,6 +24,7 @@ namespace FreeSystemTray
         private ManagedShellTrayHost? _host;
         private ShowHideController? _showHide;
         private SettingsWatcher? _settingsWatcher;
+        private ThemeWatcher? _themeWatcher;
         private StateWriter? _stateWriter;
 
         public App(CommandLine options)
@@ -45,6 +48,11 @@ namespace FreeSystemTray
             if (_options.ShowHideCommand is ShowHideCommand command)
             {
                 Shutdown(SendToRunningInstance(command) ? 0 : 1);
+                return;
+            }
+            if (_options.ImportTheme != null || _options.ExportTheme != null)
+            {
+                Shutdown(RunThemeCommand() ? 0 : 1);
                 return;
             }
 
@@ -86,12 +94,14 @@ namespace FreeSystemTray
                 TraceMessages = _options.Verbose,
                 Log = AppLog.Write
             });
-            var window = new TrayWindow(_host, settings, store);
+            var themes = new ThemeStore(ThemeStore.UserDirectoryFor(store.FilePath), ThemeStore.DefaultBuiltInDirectory);
+            var window = new TrayWindow(_host, settings, store, themes);
             MainWindow = window;
             _showHide = new ShowHideController(window, _host, settings.ShowHide, AppLog.Write, _options.Verbose);
             window.ShowHide = _showHide;
             _showHide.Start(); // shows the window, unless auto-hide keeps it hidden
             _settingsWatcher = new SettingsWatcher(store, Dispatcher, window.ApplySettings, AppLog.Write);
+            _themeWatcher = new ThemeWatcher(themes.UserDirectory, Dispatcher, window.LoadTheme, AppLog.Write);
 
             try
             {
@@ -114,6 +124,7 @@ namespace FreeSystemTray
         {
             _stateWriter?.Dispose();
             _settingsWatcher?.Dispose();
+            _themeWatcher?.Dispose();
             _showHide?.Dispose();
             if (_host != null)
             {
@@ -165,6 +176,47 @@ namespace FreeSystemTray
             finally
             {
                 if (process != IntPtr.Zero) NativeMethods.CloseHandle(process);
+            }
+        }
+
+        /// <summary>
+        /// --import-theme copies the file into the themes folder and selects it in the settings (a
+        /// running instance applies it at once); --export-theme writes the current theme. The outcome
+        /// is in the log and the exit code.
+        /// </summary>
+        private bool RunThemeCommand()
+        {
+            var store = new SettingsStore(_options.SettingsPath ?? SettingsStore.DefaultPath);
+            var themes = new ThemeStore(ThemeStore.UserDirectoryFor(store.FilePath), ThemeStore.DefaultBuiltInDirectory);
+            AppSettings settings = store.Load(AppLog.Write);
+            var problems = new List<string>();
+            try
+            {
+                if (_options.ImportTheme is string import)
+                {
+                    if (!themes.Import(import, out string id, problems))
+                    {
+                        AppLog.Write($"--import-theme {import}: not imported: {string.Join("; ", problems)}");
+                        return false;
+                    }
+                    themes.Load(id, problems);
+                    settings.Theme = id;
+                    store.Save(settings);
+                    AppLog.Write($"--import-theme: '{id}' copied to {themes.UserDirectory} and selected" +
+                                 (problems.Count > 0 ? $"; problems: {string.Join("; ", problems)}" : ""));
+                    return true;
+                }
+                string target = _options.ExportTheme!;
+                Theme theme = themes.Load(settings.Theme, problems);
+                ThemeStore.Export(theme, target);
+                AppLog.Write($"--export-theme: theme '{theme.Id}' written to {Path.GetFullPath(target)}" +
+                             (problems.Count > 0 ? $"; problems: {string.Join("; ", problems)}" : ""));
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                AppLog.Write($"Theme command failed: {ex.Message}");
+                return false;
             }
         }
 

@@ -1,0 +1,5 @@
+{
+  "name": "Glass grid",
+  "basedOn": "Glass",
+  "icons": { "layout": "Grid", "gridColumns": 4, "spacing": 2 }
+}

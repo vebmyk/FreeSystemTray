@@ -62,7 +62,20 @@ namespace FreeSystemTray.Diagnostics
                 {
                     ["iconSize"] = _window.Layout.IconSize,
                     ["cellSize"] = _window.Layout.CellSize,
-                    ["thickness"] = _window.Layout.Thickness
+                    ["thickness"] = _window.Layout.Thickness,
+                    ["cornerRadius"] = _window.Layout.CornerRadius,
+                    ["spacing"] = _window.Layout.Spacing
+                },
+                ["theme"] = new Dictionary<string, object?>
+                {
+                    ["id"] = _window.Theme.Id,
+                    ["name"] = _window.Theme.Name,
+                    ["arrangement"] = _window.Theme.Layout.ToString(),
+                    ["blur"] = _window.Theme.Blur.ToString(),
+                    ["blurShown"] = _window.BlurShown,
+                    ["transparencyEffects"] = _window.TransparencyEffects,
+                    ["xaml"] = _window.Theme.XamlPath,
+                    ["problems"] = _window.ThemeProblems.ToList()
                 },
                 ["shell"] = Shell(),
                 ["iconCount"] = _host.Icons.Count,

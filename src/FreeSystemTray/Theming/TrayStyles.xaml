@@ -1,0 +1,28 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- The tray's styles. They take their values from the theme's resources (ThemeResources), so a
+         theme's XAML dictionary, merged after both, can override a value or a whole style. -->
+
+    <!-- Tooltips of the tray's icons. -->
+    <Style TargetType="ToolTip">
+        <Setter Property="Foreground" Value="{DynamicResource ToolTip.Foreground}" />
+        <Setter Property="FontFamily" Value="{DynamicResource ToolTip.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource ToolTip.FontSize}" />
+        <Setter Property="Padding" Value="{DynamicResource ToolTip.Padding}" />
+        <Setter Property="HasDropShadow" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToolTip">
+                    <Border Background="{DynamicResource ToolTip.Background}"
+                            BorderBrush="{DynamicResource ToolTip.BorderBrush}"
+                            BorderThickness="{DynamicResource ToolTip.BorderThickness}"
+                            CornerRadius="{DynamicResource ToolTip.CornerRadius}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

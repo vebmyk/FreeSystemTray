@@ -34,6 +34,7 @@ Verified in Phase 0 and Phase 1 on Windows 10 22H2 unless marked otherwise. Deta
 - Windows 10's own flyouts (network, volume, power) ignore the taskbar edge the host reports: they center on the tray or the icon and are then pushed inside the work area, so they overlap a free-floating window (Phase 1).
 - WPF lets a window be layered (and so fade or be see-through) only if it is created with `AllowsTransparency`; it strips `WS_EX_LAYERED` from any other window. The tray window is created that way (Phase 2).
 - Closing a Windows 10 flyout gives the foreground to Explorer's taskbar (Phase 2).
+- While Windows' "Transparency effects" is off, a `SetWindowCompositionAttribute` blur or acrylic is drawn as solid black (Phase 4).
 - Icon images: each app hands over one `HICON`, usually 16 px at 100% scaling; 20, 32, 40 and 48 px were also seen at 100% (Phases 0 and 3). There is no larger version to ask for.
 - Reference implementations for the message formats: RetroBar, Cairo Desktop, ReactOS `explorer` (systray), Wine `explorer/systray.c`.
 
@@ -83,11 +84,12 @@ Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDIN
 - Per-Monitor V2 was already in the manifest; icons are scaled again when the DPI changes.
 - Not tested: mixed DPI and moving the tray between monitors (one monitor at 100% here). FINDINGS.md, Phase 3, says how to check it.
 
-### Phase 4: Appearance and themes
-- Data-driven WPF templates: background color/opacity, blur/acrylic, corner radius, border, icon spacing, orientation (row, column, grid with N columns), hover/pressed effects, tooltip styling.
-- Blur on Windows 10 uses the undocumented `SetWindowCompositionAttribute`, with a solid-color fallback. On Windows 11 prefer the official `DWMWA_SYSTEMBACKDROP_TYPE` (Mica/acrylic) and account for system-rounded corners.
-- The window is already per-pixel transparent (Phase 2), so background opacity and corner radius only need the content to draw them. Test the blur on this kind of window (layered, drawn by WPF), and keep the show/hide animations working with it.
-- Themes as JSON, plus optional XAML resource dictionaries for advanced users. Import/export and live preview.
+### Phase 4: Appearance and themes (done)
+Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDINGS.md` (Phase 4); theme files are described in `README.md` ("Themes").
+- Built: JSON themes that list only what they change (`basedOn` for the rest), eight built-in themes (the sample theme set, in `src/FreeSystemTray/Themes`), the user's own themes next to `settings.json`, and optional XAML resource dictionaries that can replace the brushes and the tooltip style. A theme sets background colour and opacity, blur or acrylic, corner radius, border, grip, icons in a row, a column or a grid of N columns with spacing, hover and pressed colours, and the tooltip's look. Its sizes scale with the tray size.
+- Live preview: the grip menu's Theme submenu, and theme files applied while the app runs. Import and export with `--import-theme` and `--export-theme`.
+- Blur uses `SetWindowCompositionAttribute`, turned off during show/hide animations, with a rounded window region. While Windows' "Transparency effects" is off (as on the test machine), Windows draws it as solid black, so the tray falls back to its colour, opaque. The blur itself has not been seen yet; FINDINGS.md says how to check it.
+- Not as planned: no `DWMWA_SYSTEMBACKDROP_TYPE` on Windows 11. As far as I know the system backdrops need a window that is not layered, and the tray is layered so it can fade; it uses `SetWindowCompositionAttribute` there too, and asks Windows 11 not to round its corners. Untested (no Windows 11 machine).
 
 ### Phase 5: Management features
 - Per-icon rules: hide, always show, reorder (drag), custom label or tooltip override.
@@ -133,8 +135,8 @@ Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDIN
 Source repo with a README, build instructions, a sample theme set, `FINDINGS.md` from Phase 0 (done), the smoke test (`tests/smoke`, built on the Phase 0 test app and harness in `spike/`), and a short test checklist of the apps tested in Phase 0 (in `FINDINGS.md`) and Phase 6.
 
 ## Instructions to the implementer
-- Phases 0 to 3 are done (`FINDINGS.md`). Wait for approval before starting Phase 4.
+- Phases 0 to 4 are done (`FINDINGS.md`). Wait for approval before starting Phase 5.
 - Have real tray apps running during testing, and state which Windows version and build you are testing on.
-- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture. Run the smoke test (`tests/smoke`) after changes to the tray host, show/hide or scaling, and before every ManagedShell upgrade.
+- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture. Run the smoke test (`tests/smoke`) after changes to the tray host, show/hide, scaling or themes, and before every ManagedShell upgrade.
 - Keep tray host logic behind `ITrayHost` and separate from the UI.
 - Explorer's tray must keep working while our app runs, after it exits, and after it crashes.

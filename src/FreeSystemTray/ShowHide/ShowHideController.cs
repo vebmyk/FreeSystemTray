@@ -213,7 +213,11 @@ namespace FreeSystemTray.ShowHide
                 _window.Show();
             }
             _window.BringToTop();
-            _animator.Run(1, kind, AnimationDuration(), _window.Edge, _window.RefreshBounds);
+            _animator.Run(1, kind, AnimationDuration(), _window.Edge, () =>
+            {
+                _window.SetEffectsSuspended(false); // the blur is back once the tray is fully shown
+                _window.RefreshBounds();
+            });
             UpdateWatchers();
             _log($"Shown ({Describe(cause)})");
         }
@@ -231,6 +235,7 @@ namespace FreeSystemTray.ShowHide
             _inFrontOfFullScreen = false;
             UpdateTrayWindowVisible();
             UpdateWatchers();
+            _window.SetEffectsSuspended(true); // a blur would stay at full strength behind the fading tray
             _animator.Run(0, AnimationKind(), AnimationDuration(), _window.Edge, () =>
             {
                 _window.Hide();

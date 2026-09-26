@@ -30,6 +30,7 @@ namespace SpikeTool
     ///   fullscreen-window MS [f11]  a full-screen window on the primary monitor for MS milliseconds; with
     ///                             f11, a normal window that turns full screen for most of that time
     ///   pixel X Y                 the colour on screen at X,Y (#RRGGBB)
+    ///   mouse-down X Y, mouse-up  press the left button at X,Y, and release it (to look at a pressed state)
     ///   post "WINDOW TITLE" N     PostMessage(WM_APP+N)
     ///   taskbarcreated [HWND]     broadcast the TaskbarCreated message (or post it to one window)
     ///   appbar                    what apps see from the tray host: ABM_GETTASKBARPOS, ABM_GETSTATE,
@@ -65,6 +66,8 @@ namespace SpikeTool
                     case "wait-idle": return WaitIdle(I(args[1]), args.Length > 2 ? I(args[2]) : 60_000);
                     case "click-target": ClickTarget(I(args[1]), I(args[2]), args.Length > 3 ? args[3] : "left"); break;
                     case "fullscreen-probe": FullScreenProbe(args); break;
+                    case "mouse-down": W.SetCursorPos(I(args[1]), I(args[2])); Thread.Sleep(60); W.SendInput(1, new[] { new W.INPUT { type = 0, mi = new W.MOUSEINPUT { dwFlags = 0x0002 } } }, Marshal.SizeOf<W.INPUT>()); break;
+                    case "mouse-up": W.SendInput(1, new[] { new W.INPUT { type = 0, mi = new W.MOUSEINPUT { dwFlags = 0x0004 } } }, Marshal.SizeOf<W.INPUT>()); break;
                     case "fullscreen-window": FullScreenWindow(I(args[1]), args.Length > 2 && args[2] == "f11"); break;
                     case "pixel":
                     {

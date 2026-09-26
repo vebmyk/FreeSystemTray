@@ -1,0 +1,6 @@
+{
+  // Windows 10's acrylic: the background colour and opacity tint the blur.
+  "name": "Acrylic",
+  "basedOn": "Glass",
+  "background": { "color": "#202020", "opacity": 0.6, "blur": "Acrylic" }
+}

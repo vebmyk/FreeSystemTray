@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
   End-to-end smoke test of FreeSystemTray against the real shell. Run it before every ManagedShell
-  upgrade and after changes to the tray host, show/hide or scaling.
+  upgrade and after changes to the tray host, show/hide, scaling or themes.
 
 .DESCRIPTION
   Uses the Phase 0 test app (spike/TestTrayApp) and harness (spike/SpikeTool). It starts four test
@@ -17,6 +17,8 @@
       hotkey, click-away, the auto-hide timer, and a menu opened from the tray keeping it shown;
     - scaling: icon and tray sizes set in the settings file, snapping, .exe icons (a click on a
       scaled icon with -SkipMouse left out);
+    - themes: layouts, blur against Windows' transparency setting, a theme of one's own with live
+      edits, --export-theme and --import-theme;
     - with -SkipMouse left out: stepping behind a full-screen window (a new one, and one turning
       full screen like F11) and the hotkey bringing the tray up over it;
     - hand-back on a graceful exit and after the process is killed (watchdog).
@@ -372,6 +374,43 @@ try {
     Write-Settings '{ }'
     Check "back to 100%: 16 px icons in 24 px cells, in the same place" ((Wait-Until { Test-Icons { param($i) $i.drawnPx -eq 16 -and $i.rect[2] -eq 24 } } 5000) -and
         (Corner) -eq $corner) "corner $(Corner), was $corner"
+
+    # --- Themes: built-in ones, the user's own (live edits), import and export -------------
+    function Theme-State { return (Read-State $run).theme }
+    function Smoke-Rects { return @((Read-State $run).icons | Where-Object { $_.tip -like "Smoke*" -and $_.rect } | ForEach-Object { , @([int]$_.rect[0], [int]$_.rect[1]) }) }
+    Write-Settings '{ "theme": "DarkColumn" }'
+    Check "theme DarkColumn: the icons stand in one column, and the tray keeps its anchor corner" ((Wait-Until {
+        $r = Smoke-Rects; (Theme-State).arrangement -eq "Column" -and $r.Count -ge 4 -and @($r | ForEach-Object { $_[0] } | Sort-Object -Unique).Count -eq 1 } 5000) -and
+        (Corner) -eq $corner) "corner $(Corner), was $corner"
+    Write-Settings '{ "theme": "GlassGrid" }'
+    Check "theme GlassGrid: rows of 4 icons, rounded corners" (Wait-Until {
+        $s = Read-State $run; $s.theme.arrangement -eq "Grid" -and $s.layout.cornerRadius -eq 8 -and
+            @($s.icons | Where-Object { $_.rect } | ForEach-Object { [int]$_.rect[0] } | Sort-Object -Unique).Count -eq 4 } 5000)
+    $ts = Theme-State
+    Check "a blur theme blurs only while Windows' transparency effects are on, else it is solid" ($ts.blur -eq "Blur" -and $ts.blurShown -eq $ts.transparencyEffects) "blurShown $($ts.blurShown), transparency effects $($ts.transparencyEffects)"
+
+    $themes = Join-Path $OutDir "themes"
+    New-Item -ItemType Directory -Force $themes | Out-Null
+    Set-Content -Path (Join-Path $themes "SmokeTheme.json") -Encoding UTF8 -Value '{ "name": "Smoke theme", "basedOn": "Glass", "border": { "cornerRadius": 12 } }'
+    Write-Settings '{ "theme": "SmokeTheme" }'
+    Check "a theme of one's own, based on a built-in one" (Wait-Until { $t = Theme-State; $t.id -eq "SmokeTheme" -and (Read-State $run).layout.cornerRadius -eq 12 } 5000)
+    Set-Content -Path (Join-Path $themes "SmokeTheme.json") -Encoding UTF8 -Value '{ "name": "Smoke theme", "basedOn": "Glass", "border": { "cornerRadius": 3 }, "icons": { "spacing": 4 } }'
+    Check "editing it applies while the app runs" (Wait-Until { $s = Read-State $run; $s.layout.cornerRadius -eq 3 -and $s.layout.spacing -eq 4 } 5000)
+    Set-Content -Path (Join-Path $themes "SmokeTheme.json") -Encoding UTF8 -Value '{ "border": '
+    Check "a broken edit is reported and the version in use stays" (Wait-Until { $s = Read-State $run; $s.theme.problems.Count -gt 0 -and $s.layout.cornerRadius -eq 3 } 5000) ((Theme-State).problems -join "; ")
+
+    Write-Settings '{ "theme": "Gradient" }'
+    [void](Wait-Until { (Theme-State).id -eq "Gradient" } 5000)
+    $export = Join-Path $OutDir "export\Exported.json"
+    $p = Start-Process -FilePath $app -ArgumentList "--export-theme `"$export`" --settings `"$(Join-Path $OutDir 'settings.json')`" --log-dir `"$run\cmd`"" -PassThru -Wait
+    Check "--export-theme writes the theme with its XAML" ($p.ExitCode -eq 0 -and (Test-Path $export) -and (Test-Path (Join-Path $OutDir "export\Gradient.xaml")))
+    $p = Start-Process -FilePath $app -ArgumentList "--import-theme `"$export`" --settings `"$(Join-Path $OutDir 'settings.json')`" --log-dir `"$run\cmd`"" -PassThru -Wait
+    Check "--import-theme copies it into the themes folder and the running tray switches to it" ($p.ExitCode -eq 0 -and
+        (Wait-Until { $t = Theme-State; $t.id -eq "Exported" -and $t.xaml -like "*\themes\Gradient.xaml" -and $t.problems.Count -eq 0 } 5000)) "theme $((Theme-State).id), xaml $((Theme-State).xaml)"
+
+    Write-Settings '{ }'
+    Check "back to Dark: one row of 24 px cells, in the same place" ((Wait-Until { (Theme-State).id -eq "Dark" -and (Test-Icons { param($i) $i.rect[2] -eq 24 }) -and
+        @(Smoke-Rects | ForEach-Object { $_[1] } | Sort-Object -Unique).Count -eq 1 } 5000) -and (Corner) -eq $corner) "corner $(Corner), was $corner"
 
     # --- Graceful exit ----------------------------------------------------------------------
     Post "SmokeC" 1

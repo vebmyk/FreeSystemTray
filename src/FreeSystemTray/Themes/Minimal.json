@@ -1,0 +1,7 @@
+{
+  "name": "Minimal",
+  "background": { "color": "#202020", "opacity": 0.85 },
+  "border": { "thickness": 0, "cornerRadius": 4 },
+  "grip": { "color": "#40FFFFFF", "size": 5 },
+  "icons": { "spacing": 2, "highlightCornerRadius": 3 }
+}

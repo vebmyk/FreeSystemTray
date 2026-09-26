@@ -39,6 +39,17 @@ namespace FreeSystemTray.Tests
             Assert.False(loaded.ShowHide.AutoHide);
             Assert.Equal("Ctrl+Alt+Shift+T", loaded.ShowHide.Hotkey);
             Assert.Equal(HotspotLocation.None, loaded.ShowHide.Hotspot);
+            Assert.Equal("Dark", loaded.Theme);
+        }
+
+        [Fact]
+        public void The_theme_survives_a_save_and_an_empty_one_is_the_default()
+        {
+            var store = new SettingsStore(File1);
+            store.Save(new AppSettings { Theme = "Glass" });
+            Assert.Equal("Glass", store.Load().Theme);
+            File.WriteAllText(File1, "{ \"theme\": \"\" }");
+            Assert.Equal("Dark", new SettingsStore(File1).Load().Theme);
         }
 
         [Fact]
@@ -174,6 +185,14 @@ namespace FreeSystemTray.Tests
             Assert.Equal(@"C:\s.json", o.SettingsPath);
             Assert.Equal(@"C:\logs", o.EffectiveLogDir);
             Assert.True(o.Exit && o.NoWatchdog && o.NoMirror && o.NoTopmostFix && o.NoAutoHideForward && o.NoQueryRouting);
+        }
+
+        [Fact]
+        public void Theme_commands_are_read()
+        {
+            Assert.Equal(@"C:\t\Nice.json", CommandLine.Parse(new[] { "--import-theme", @"C:\t\Nice.json" }).ImportTheme);
+            Assert.Equal("out.json", CommandLine.Parse(new[] { "--export-theme", "out.json" }).ExportTheme);
+            Assert.Throws<ArgumentException>(() => CommandLine.Parse(new[] { "--export-theme" }));
         }
 
         [Theory]

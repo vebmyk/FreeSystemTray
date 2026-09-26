@@ -15,6 +15,8 @@ namespace FreeSystemTray
     ///                     test into DIR; implies --log-dir DIR and --verbose
     ///   --exit            close the running instance and wait for it to exit
     ///   --toggle, --show, --hide   show or hide the running instance's window
+    ///   --import-theme FILE   copy a theme file into the themes folder and switch to it
+    ///   --export-theme FILE   write the current theme, every value spelled out, to FILE
     ///   --no-watchdog     do not start the watchdog process
     ///   --no-mirror, --no-topmost-fix, --no-autohide-forward, --no-query-routing
     ///                     turn off one workaround (ManagedShell as shipped), for comparison tests
@@ -31,6 +33,9 @@ namespace FreeSystemTray
 
         /// <summary>--toggle, --show or --hide: sent to the running instance.</summary>
         public ShowHideCommand? ShowHideCommand { get; private set; }
+
+        public string? ImportTheme { get; private set; }
+        public string? ExportTheme { get; private set; }
 
         public bool NoWatchdog { get; private set; }
         public bool NoMirror { get; private set; }
@@ -58,6 +63,8 @@ namespace FreeSystemTray
                     case "--toggle": o.ShowHideCommand = ShowHide.ShowHideCommand.Toggle; break;
                     case "--show": o.ShowHideCommand = ShowHide.ShowHideCommand.Show; break;
                     case "--hide": o.ShowHideCommand = ShowHide.ShowHideCommand.Hide; break;
+                    case "--import-theme": o.ImportTheme = Next(); break;
+                    case "--export-theme": o.ExportTheme = Next(); break;
                     case "--no-watchdog": o.NoWatchdog = true; break;
                     case "--no-mirror": o.NoMirror = true; break;
                     case "--no-topmost-fix": o.NoTopmostFix = true; break;

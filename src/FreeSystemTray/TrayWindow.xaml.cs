@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Threading;
 using FreeSystemTray.Logging;
@@ -14,6 +16,7 @@ using FreeSystemTray.Placement;
 using FreeSystemTray.Scaling;
 using FreeSystemTray.Settings;
 using FreeSystemTray.ShowHide;
+using FreeSystemTray.Theming;
 using FreeSystemTray.TrayHost;
 
 namespace FreeSystemTray
@@ -43,16 +46,26 @@ namespace FreeSystemTray
         private PixelPoint _dragStartCursor;
         private PixelRect _dragStartBounds;
         private IReadOnlyList<MonitorInfo> _dragMonitors = Array.Empty<MonitorInfo>();
+        private readonly ThemeStore _themes;
+        private Theme _theme = Theme.Default;
+        private ResourceDictionary? _themeXaml;
+        private bool _effectsSuspended;
+        private bool _blurShown;
+        private TrayBlur _blurKind;
+        private (int Width, int Height, int Radius) _region;
+        private (bool AcrylicShown, bool BlurUnavailable) _background;
+        private bool _transparency = WindowEffects.TransparencyEnabled();
 
-        public TrayWindow(ITrayHost host, AppSettings settings, SettingsStore store)
+        public TrayWindow(ITrayHost host, AppSettings settings, SettingsStore store, ThemeStore themes)
         {
             _host = host;
             _settings = settings;
             _store = store;
+            _themes = themes;
             InitializeComponent();
             Title = WindowTitle;
 
-            ApplyScaling(settings.Scaling);
+            LoadTheme();
             IconList.ItemsSource = host.Icons;
             ((INotifyCollectionChanged)host.Icons).CollectionChanged += Icons_CollectionChanged;
 
@@ -136,31 +149,188 @@ namespace FreeSystemTray
             UpdateGrip();
             QueuePlacement();
             ShowHide?.ApplySettings(settings.ShowHide);
-            ApplyScaling(settings.Scaling);
+            LoadTheme();
         }
 
-        /// <summary>The sizes in use, from the scaling settings.</summary>
+        /// <summary>The sizes in use, from the scaling settings and the theme.</summary>
         internal TrayLayout Layout { get; private set; } = TrayLayout.Default;
 
-        /// <summary>
-        /// Sizes the icons and everything around them, and sets how icons are scaled and whether sizes
-        /// snap to whole screen pixels. The window then resizes itself around its anchor corner.
-        /// </summary>
-        private void ApplyScaling(ScalingSettings s)
+        /// <summary>The theme in use.</summary>
+        internal Theme Theme => _theme;
+
+        /// <summary>What was wrong with the theme's files when it was last loaded (diagnostics).</summary>
+        internal IReadOnlyList<string> ThemeProblems { get; private set; } = Array.Empty<string>();
+
+        /// <summary>Whether the theme's blur is being drawn now (it is off during show/hide animations).</summary>
+        internal bool BlurShown => _blurShown;
+
+        /// <summary>Windows' "Transparency effects" setting, as last read.</summary>
+        internal bool TransparencyEffects => _transparency;
+
+        /// <summary>(Re)reads the theme named in the settings from its files and applies it.</summary>
+        internal void LoadTheme()
         {
-            TrayLayout layout = TrayLayout.Compute(ParseSize(s.IconSize, "iconSize"), ParseSize(s.TraySize, "traySize"));
+            var problems = new List<string>();
+            string requested = string.IsNullOrWhiteSpace(_settings.Theme) ? ThemeStore.DefaultId : _settings.Theme.Trim();
+            Theme theme = _themes.Load(requested, problems);
+            foreach (string p in problems) AppLog.Write("Theme: " + p);
+            ThemeProblems = problems;
+            // The theme in use could not be read now (for example half-saved in an editor): keep it
+            // until its file reads again, rather than falling back to the defaults.
+            if (!string.Equals(theme.Id, requested, StringComparison.OrdinalIgnoreCase) && string.Equals(_theme.Id, requested, StringComparison.OrdinalIgnoreCase))
+            {
+                AppLog.Write($"Theme {requested} could not be loaded; keeping the version in use");
+                ApplyAppearance();
+                return;
+            }
+            _theme = theme;
+
+            _themeXaml = null;
+            if (theme.XamlPath != null)
+            {
+                try
+                {
+                    _themeXaml = ThemeResources.LoadXaml(theme.XamlPath);
+                }
+                catch (Exception ex) when (ex is XamlParseException or IOException or UnauthorizedAccessException)
+                {
+                    AppLog.Write($"Theme: {theme.XamlPath} could not be loaded: {ex.Message}");
+                    ThemeProblems = problems.Append($"{theme.XamlPath}: {ex.Message}").ToList();
+                }
+            }
+            AppLog.Write($"Theme {theme.Id} ('{theme.Name}'): {theme.Layout}{(theme.Layout == IconLayout.Grid ? $" of {theme.GridColumns}" : "")}, " +
+                         $"background {Theme.Format(theme.Background)} at {theme.BackgroundOpacity:0.##}, blur {theme.Blur}" +
+                         (theme.Blur != TrayBlur.None && !_transparency ? " (Windows' transparency effects are off: solid background instead)" : "") +
+                         $", corner radius {theme.CornerRadius:0.##}" +
+                         (_themeXaml != null ? $", XAML {theme.XamlPath}" : ""));
+            ApplyAppearance();
+        }
+
+        /// <summary>
+        /// Applies the scaling settings and the theme: sizes, colours, the icons' arrangement, the grip's
+        /// side, and the blur. The window then resizes itself around its anchor corner.
+        /// </summary>
+        private void ApplyAppearance()
+        {
+            ScalingSettings s = _settings.Scaling;
+            Theme t = _theme;
+            TrayLayout layout = TrayLayout.Compute(ParseSize(s.IconSize, "iconSize"), ParseSize(s.TraySize, "traySize"),
+                new TrayMetrics(t.BorderThickness, t.GripSize, t.CornerRadius, t.IconSpacing, t.HighlightCornerRadius));
             Layout = layout;
             Resources["IconSize"] = layout.IconSize;
             Resources["CellSize"] = layout.CellSize;
-            Resources["GripWidth"] = layout.GripWidth;
             Resources["TrayBorder"] = new Thickness(layout.BorderThickness);
-            Resources["IconListMargin"] = new Thickness(layout.MarginAlong, layout.MarginAcross, layout.MarginAlong, layout.MarginAcross);
+            Resources["Tray.CornerRadius"] = new CornerRadius(layout.CornerRadius);
+            Resources["Icon.HighlightCornerRadius"] = new CornerRadius(layout.HighlightCornerRadius);
+            Resources["Icons.Layout"] = t.Layout;
+            Resources["Icons.Columns"] = t.GridColumns;
+            Resources["Icons.Spacing"] = layout.Spacing;
+            Resources["IconListMargin"] = t.Layout == IconLayout.Column
+                ? new Thickness(layout.MarginAcross, layout.MarginAlong, layout.MarginAcross, layout.MarginAlong)
+                : new Thickness(layout.MarginAlong, layout.MarginAcross, layout.MarginAlong, layout.MarginAcross);
+            PlaceGrip(t.EffectiveGripPosition, layout);
+            UpdateThemeDictionaries();
             UseLayoutRounding = s.SnapToPixels;
             SnapsToDevicePixels = s.SnapToPixels;
             ScaledIcon.SetOptions(IconList, new IconRenderOptions(s.IconScaling, s.SnapToPixels, s.ExeIcons.ToArray()));
             AppLog.Write($"Scaling: icons {layout.IconSize:0.##} px ({s.IconSize}) in {layout.CellSize:0.##} px cells (tray size {s.TraySize}), " +
                          $"{s.IconScaling}, {(s.SnapToPixels ? "snapped to whole pixels" : "exact sizes")}" +
                          (s.ExeIcons.Count > 0 ? $", exe icons for {string.Join(", ", s.ExeIcons)}" : ""));
+            UpdateWindowEffects();
+        }
+
+        /// <summary>The grip on one side of the icons, as long as the tray, with the tray's rounded corners on its outer side.</summary>
+        private void PlaceGrip(GripPosition side, TrayLayout layout)
+        {
+            DockPanel.SetDock(Grip, side switch
+            {
+                GripPosition.Top => Dock.Top,
+                GripPosition.Right => Dock.Right,
+                GripPosition.Bottom => Dock.Bottom,
+                _ => Dock.Left
+            });
+            bool across = side is GripPosition.Top or GripPosition.Bottom;
+            Grip.Width = across ? double.NaN : layout.GripWidth;
+            Grip.Height = across ? layout.GripWidth : double.NaN;
+            double r = Math.Max(0, layout.CornerRadius - layout.BorderThickness);
+            Resources["Grip.CornerRadius"] = side switch
+            {
+                GripPosition.Top => new CornerRadius(r, r, 0, 0),
+                GripPosition.Right => new CornerRadius(0, r, r, 0),
+                GripPosition.Bottom => new CornerRadius(0, 0, r, r),
+                _ => new CornerRadius(r, 0, 0, r)
+            };
+        }
+
+        /// <summary>
+        /// The theme's values and its own XAML as merged dictionaries after the styles, so the XAML
+        /// wins. With acrylic shown, Windows draws the tint and the tray's background stays clear.
+        /// </summary>
+        private void UpdateThemeDictionaries()
+        {
+            var merged = Resources.MergedDictionaries;
+            while (merged.Count > 1) merged.RemoveAt(merged.Count - 1);
+            _background = BackgroundState();
+            merged.Add(ThemeResources.Build(_theme, _background.AcrylicShown, _background.BlurUnavailable));
+            if (_themeXaml != null) merged.Add(_themeXaml);
+        }
+
+        /// <summary>
+        /// How the background is drawn: clear while Windows draws acrylic (it draws the tint), opaque
+        /// when the theme wants a blur but Windows' transparency effects are off, as Windows does with
+        /// its own blurred surfaces.
+        /// </summary>
+        private (bool AcrylicShown, bool BlurUnavailable) BackgroundState() =>
+            (_blurShown && _blurKind == TrayBlur.Acrylic, _theme.Blur != TrayBlur.None && !_transparency);
+
+        /// <summary>
+        /// Turns the theme's blur on or off to match the theme, Windows' transparency setting and
+        /// whether an animation runs, and clips the window to its rounded corners while the blur is on
+        /// (the blur would show square corners).
+        /// </summary>
+        private void UpdateWindowEffects()
+        {
+            if (_hwnd == IntPtr.Zero) return;
+            bool blur = _theme.Blur != TrayBlur.None && !_effectsSuspended && _transparency;
+            if (blur != _blurShown || _theme.Blur != _blurKind)
+            {
+                if (!WindowEffects.SetBlur(_hwnd, blur ? _theme.Blur : TrayBlur.None, ThemeResources.BackgroundColor(_theme)))
+                    AppLog.Write($"SetWindowCompositionAttribute failed; no {_theme.Blur} behind the tray");
+                _blurShown = blur;
+                _blurKind = _theme.Blur;
+            }
+            else if (blur && _theme.Blur == TrayBlur.Acrylic)
+            {
+                WindowEffects.SetBlur(_hwnd, TrayBlur.Acrylic, ThemeResources.BackgroundColor(_theme)); // the tint may have changed
+            }
+            if (BackgroundState() != _background) UpdateThemeDictionaries();
+
+            int radius = 0;
+            if (blur && NativeMethods.GetWindowRect(_hwnd, out NativeMethods.RECT r))
+            {
+                radius = (int)Math.Round(Layout.CornerRadius * VisualTreeHelper.GetDpi(this).DpiScaleX);
+                var region = (r.Right - r.Left, r.Bottom - r.Top, radius);
+                if (region == _region) return;
+                _region = region;
+                WindowEffects.SetRoundedRegion(_hwnd, region.Item1, region.Item2, radius);
+                return;
+            }
+            if (_region != default)
+            {
+                _region = default;
+                WindowEffects.SetRoundedRegion(_hwnd, 0, 0, 0);
+            }
+        }
+
+        /// <summary>
+        /// Show/hide animations turn the blur off while they run: Windows would keep drawing it at full
+        /// strength behind a fading or sliding tray.
+        /// </summary>
+        internal void SetEffectsSuspended(bool suspended)
+        {
+            if (_effectsSuspended == suspended) return;
+            _effectsSuspended = suspended;
+            UpdateWindowEffects();
         }
 
         /// <summary>The element drawing an icon, if its cell exists (diagnostics).</summary>
@@ -212,6 +382,7 @@ namespace FreeSystemTray
             int ex = NativeMethods.GetWindowLong(_hwnd, NativeMethods.GWL_EXSTYLE);
             NativeMethods.SetWindowLong(_hwnd, NativeMethods.GWL_EXSTYLE, ex | NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_NOACTIVATE);
             HwndSource.FromHwnd(_hwnd)?.AddHook(WndProc);
+            WindowEffects.DoNotRoundCorners(_hwnd);
 
             // Size and place the window before it is first shown.
             ContentHost.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -226,6 +397,17 @@ namespace FreeSystemTray
             {
                 _reportedBounds = default;
                 QueuePlacement();
+            }
+            // Personalization colours changed, which includes "Transparency effects".
+            if (msg == NativeMethods.WM_SETTINGCHANGE && lParam != IntPtr.Zero && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet")
+            {
+                bool transparency = WindowEffects.TransparencyEnabled();
+                if (transparency != _transparency)
+                {
+                    _transparency = transparency;
+                    AppLog.Write($"Windows' transparency effects turned {(transparency ? "on" : "off")}");
+                    UpdateWindowEffects();
+                }
             }
             return IntPtr.Zero;
         }
@@ -253,6 +435,7 @@ namespace FreeSystemTray
             // Behind a full-screen window (or brought up over it), keep the Z-order; otherwise make sure it is always-on-top.
             NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, rect.Left, rect.Top, rect.Width, rect.Height,
                 NativeMethods.SWP_NOACTIVATE | (_behind != IntPtr.Zero ? NativeMethods.SWP_NOZORDER : 0));
+            UpdateWindowEffects(); // the rounded region follows the size
             QueueBoundsReport();
         }
 
@@ -392,6 +575,7 @@ namespace FreeSystemTray
                 : "Set a hotkey or a hotspot in the settings file to be able to hide the tray." +
                   (ShowHide?.HotkeyProblem is string problem ? " Hotkey: " + problem : "");
             ToolTipService.SetShowOnDisabled(HideMenuItem, true);
+            FillThemeMenu();
             // The window never activates by itself (WS_EX_NOACTIVATE), so without this the menu gets
             // no keyboard input (Esc, arrows). Explorer's taskbar menus take the foreground the same way.
             NativeMethods.SetForegroundWindow(_hwnd);
@@ -421,6 +605,33 @@ namespace FreeSystemTray
         }
 
         private void HideMenuItem_Click(object sender, RoutedEventArgs e) => ShowHide?.Hide("menu");
+
+        /// <summary>One item per theme file; choosing one switches to it at once and saves it.</summary>
+        private void FillThemeMenu()
+        {
+            ThemeMenuItem.Items.Clear();
+            foreach (ThemeInfo info in _themes.List())
+            {
+                var item = new MenuItem
+                {
+                    Header = info.Name.Replace("_", "__"), // an underscore would be an access key
+                    IsCheckable = true,
+                    IsChecked = string.Equals(info.Id, _theme.Id, StringComparison.OrdinalIgnoreCase),
+                    ToolTip = info.Path
+                };
+                string id = info.Id;
+                item.Click += (_, _) => SelectTheme(id);
+                ThemeMenuItem.Items.Add(item);
+            }
+            ThemeMenuItem.IsEnabled = ThemeMenuItem.Items.Count > 0;
+        }
+
+        private void SelectTheme(string id)
+        {
+            _settings.Theme = id;
+            SaveSettings();
+            LoadTheme();
+        }
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e) => Close();
 
@@ -461,6 +672,7 @@ namespace FreeSystemTray
 
         private void Icon_MouseLeave(object sender, MouseEventArgs e)
         {
+            if (sender is DependencyObject cell) CellState.SetIsPressed(cell, false);
             IconOf(sender)?.OnMouseLeave();
             e.Handled = true;
         }
@@ -476,6 +688,7 @@ namespace FreeSystemTray
         private void Icon_MouseDown(object sender, MouseButtonEventArgs e)
         {
             ShowHide?.NoteTrayClick();
+            if (sender is DependencyObject cell) CellState.SetIsPressed(cell, true);
             IconOf(sender)?.OnMouseDown(e.ChangedButton);
             e.Handled = true;
         }
@@ -483,6 +696,7 @@ namespace FreeSystemTray
         private void Icon_MouseUp(object sender, MouseButtonEventArgs e)
         {
             ShowHide?.NoteTrayClick();
+            if (sender is DependencyObject cell) CellState.SetIsPressed(cell, false);
             IconOf(sender)?.OnMouseUp(e.ChangedButton);
             e.Handled = true;
         }

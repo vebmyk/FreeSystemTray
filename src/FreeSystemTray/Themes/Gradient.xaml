@@ -1,0 +1,19 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Overrides for the tray's resources. The keys a theme can override are listed in README.md,
+         "Themes". -->
+    <LinearGradientBrush x:Key="Tray.Background" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#3A3F5C" Offset="0" />
+        <GradientStop Color="#1B1D2B" Offset="1" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Tray.BorderBrush" Color="#6A7AB5" />
+    <LinearGradientBrush x:Key="Tray.GripBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#6A7AB5" Offset="0" />
+        <GradientStop Color="#3A3F5C" Offset="1" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Icon.HoverBrush" Color="#556A7AB5" />
+    <SolidColorBrush x:Key="Icon.PressedBrush" Color="#886A7AB5" />
+    <SolidColorBrush x:Key="ToolTip.Background" Color="#1B1D2B" />
+    <SolidColorBrush x:Key="ToolTip.BorderBrush" Color="#6A7AB5" />
+    <CornerRadius x:Key="ToolTip.CornerRadius">4</CornerRadius>
+</ResourceDictionary>

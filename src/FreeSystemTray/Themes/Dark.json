@@ -1,0 +1,5 @@
+{
+  // The look of Phases 1 to 3. Every theme starts from these values; a theme file only lists what
+  // it changes. Sizes are pixels at a tray size of 100% and grow with the tray size.
+  "name": "Dark"
+}

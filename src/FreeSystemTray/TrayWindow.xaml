@@ -17,15 +17,28 @@
          The window is per-pixel transparent (a layered window drawn by WPF) and the background is
          drawn by the content, so the show/hide animations only change the content: its opacity for
          a fade, its position for a slide (the window clips whatever moves outside it). WPF does not
-         let a window without AllowsTransparency become layered, so it could not fade otherwise. -->
+         let a window without AllowsTransparency become layered, so it could not fade otherwise.
+         Sizes come from TrayLayout (the scaling settings and the theme), colours from the theme,
+         through resources set in code. The styles come first among the merged dictionaries, then the
+         theme's values, then the theme's own XAML, which can override both. -->
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Theming/TrayStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
     <local:ContentSizeHost x:Name="ContentHost">
-        <!-- All sizes come from TrayLayout (the scaling settings) through resources set in code. -->
-        <Border Background="#FF2B2B2B" BorderBrush="#FF6A6A6A" BorderThickness="{DynamicResource TrayBorder}">
+        <Border Background="{DynamicResource Tray.Background}"
+                BorderBrush="{DynamicResource Tray.BorderBrush}"
+                BorderThickness="{DynamicResource TrayBorder}"
+                CornerRadius="{DynamicResource Tray.CornerRadius}">
             <DockPanel>
+                <!-- Side and size are set in code from the theme's grip position. -->
                 <Border x:Name="Grip"
                         DockPanel.Dock="Left"
-                        Width="{DynamicResource GripWidth}"
-                        Background="#FF4A4A4A"
+                        Background="{DynamicResource Tray.GripBrush}"
+                        CornerRadius="{DynamicResource Grip.CornerRadius}"
                         Cursor="SizeAll"
                         MouseLeftButtonDown="Grip_MouseLeftButtonDown"
                         MouseMove="Grip_MouseMove"
@@ -39,6 +52,8 @@
                             <MenuItem x:Name="AutoHideMenuItem" Header="_Auto-hide" IsCheckable="True" Click="AutoHideMenuItem_Click" />
                             <MenuItem x:Name="HideMenuItem" Header="_Hide" Click="HideMenuItem_Click" />
                             <Separator />
+                            <MenuItem x:Name="ThemeMenuItem" Header="_Theme" />
+                            <Separator />
                             <MenuItem Header="E_xit FreeSystemTray" Click="ExitMenuItem_Click" />
                         </ContextMenu>
                     </Border.ContextMenu>
@@ -46,7 +61,9 @@
                 <ItemsControl x:Name="IconList" Margin="{DynamicResource IconListMargin}" MinWidth="{DynamicResource CellSize}" MinHeight="{DynamicResource CellSize}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
+                            <local:IconPanel Layout="{DynamicResource Icons.Layout}"
+                                             Columns="{DynamicResource Icons.Columns}"
+                                             Spacing="{DynamicResource Icons.Spacing}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
@@ -55,6 +72,7 @@
                                     Width="{DynamicResource CellSize}"
                                     Height="{DynamicResource CellSize}"
                                     Background="Transparent"
+                                    CornerRadius="{DynamicResource Icon.HighlightCornerRadius}"
                                     ToolTip="{Binding ToolTip}"
                                     MouseEnter="Icon_MouseEnter"
                                     MouseLeave="Icon_MouseLeave"
@@ -72,7 +90,11 @@
                                     <Setter TargetName="Cell" Property="Visibility" Value="Collapsed" />
                                 </DataTrigger>
                                 <Trigger SourceName="Cell" Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Cell" Property="Background" Value="#33FFFFFF" />
+                                    <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.HoverBrush}" />
+                                </Trigger>
+                                <!-- After the hover trigger, so it wins while both apply. -->
+                                <Trigger SourceName="Cell" Property="local:CellState.IsPressed" Value="True">
+                                    <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.PressedBrush}" />
                                 </Trigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>

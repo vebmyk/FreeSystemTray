@@ -1,8 +1,95 @@
 # Findings
 
-The newest phase comes first: Phase 3 (scaling), Phase 2 (show/hide), Phase 1 (production tray host,
-window and placement). The Phase 0 feasibility report follows unchanged, apart from notes where
-Phase 1 corrected it.
+The newest phase comes first: Phase 4 (appearance and themes), Phase 3 (scaling), Phase 2
+(show/hide), Phase 1 (production tray host, window and placement). The Phase 0 feasibility report
+follows unchanged, apart from notes where Phase 1 corrected it.
+
+## Phase 4: appearance and themes
+
+Date: 2026-09-26. Same machine and setup as before (Windows 10 Pro 22H2, build 19045.7725, one
+1920×1080 monitor at 100%, ManagedShell 0.0.374 on .NET 10). Windows' **"Transparency effects" is
+off** on this machine (`EnableTransparency = 0`), which matters for the blur (finding 1). Themes are
+described in [README.md](README.md), "Themes".
+
+### Phase 4 verdict
+
+**Themes work.** Unit tests (203) and the smoke test (68 checks, 9 of them new) pass, and screenshots
+of every built-in theme look as intended, over a plain background and over a striped window placed
+behind the tray. **Not seen: a real blur.** With transparency effects off, Windows draws a blur or
+acrylic as solid black, so the tray now uses the theme's colour, opaque, instead, as Windows' own
+blurred surfaces do. How to see the blur is under [Checking the blur](#checking-the-blur).
+
+### What Phase 4 built
+
+- Theme files (JSON): only the values that differ, with `basedOn` for the rest, down to the built-in
+  Dark look. Invalid values are reported (log, `state.json`) and keep the value underneath; numbers
+  are clamped to sensible limits; `basedOn` cycles are detected.
+- Eight built-in themes (the plan's sample theme set): Dark, Light, Glass, Acrylic, Minimal, Dark
+  column, Glass grid, Gradient (XAML). The user's own themes go in `themes` next to `settings.json`
+  and replace built-in ones with the same name.
+- What a theme sets: background colour and opacity; blur or acrylic (`SetWindowCompositionAttribute`,
+  with a rounded window region so the blur keeps the corners); corner radius; border colour and
+  thickness; the grip's colour, size and side; icons in a row, a column or a grid of N columns, with
+  spacing; hover and pressed colours and their corner radius; the tooltip's colours, border, corner
+  radius, font and padding; and a XAML resource dictionary that can replace the brushes, tooltip
+  values and the tooltip style. The theme's sizes scale with the tray size.
+- Live preview: the grip menu's Theme submenu switches at once, and edits to theme files apply while
+  the app runs (a half-saved file keeps the version in use). `--export-theme` and `--import-theme`.
+- The blur is turned off during show/hide animations (it would stay at full strength behind a fading
+  or sliding tray), and follows Windows' transparency setting, including when it changes.
+- Windows 11: the tray asks Windows not to round its corners (`DWMWCP_DONOTROUND`), since it draws
+  its own. Not the Windows 11 backdrops (`DWMWA_SYSTEMBACKDROP_TYPE`): as far as I know they need a
+  window that is not layered, and the tray must be layered to fade. Untested, like everything on 11.
+
+### Phase 4 results
+
+| Check | Result |
+|---|---|
+| Dark, Light, Minimal, Gradient (XAML) | ✅ As designed. Minimal's 85% background lets a striped window behind show through. Gradient's colours come from its XAML. |
+| Glass and Acrylic | ✅ Rounded, and solid while transparency effects are off. Before the fallback: solid black behind the tray (finding 1). |
+| Dark column, Glass grid (4 columns, also at 200%) | ✅ The grip moves to the top of a column; the tray keeps its anchor corner; icon rectangles follow the layout. |
+| Hover and pressed colours | ✅ Pixels over Glass: hover #494949, pressed #686868, as the colours predict. One early screenshot did not show the pressed colour; three later checks did, and I could not reproduce it. |
+| Tooltip style | ✅ Dark, rounded, bordered tooltip with the theme's font. |
+| Theme submenu | ✅ Chosen with the keyboard; applied and saved. |
+| Own theme, live edits, broken edits | ✅ Applied within about 0.3 s; a broken file is reported and the version in use stays. |
+| Bad colours, `basedOn` cycle, missing theme | ✅ Reported; the value underneath or the defaults are used. |
+| `--export-theme`, `--import-theme` | ✅ Export spells out every value and copies the XAML; import copies both and the running tray switches. A file that is not a theme is refused (exit code 1). |
+| Fade and slide with themes | ✅ Sampled at a 2 s duration with Glass (fade) and Dark column (slides out to the right, its nearest edge). |
+
+### Phase 4 findings
+
+1. **With Windows' transparency effects off, a blur or acrylic is drawn as solid black.**
+   `SetWindowCompositionAttribute` succeeded, and the tray's semi-transparent background then showed
+   black behind it (#181818 over a striped window) instead of the stripes. Windows' own blurred
+   surfaces turn solid in that case too. So the tray draws the theme's colour, opaque, while the
+   setting is off, and rechecks when Windows broadcasts `WM_SETTINGCHANGE` "ImmersiveColorSet"
+   (not seen, because I did not change the setting).
+2. **A WPF implicit `ToolTip` style in the window's merged dictionaries reaches the icons' tooltips**,
+   and rounded tooltip corners render cleanly. A theme's own XAML, merged after it, can replace it.
+3. **Windows reports light mode here** (`SystemUsesLightTheme = 1`), yet Windows' own volume, network
+   and battery icons arrive white, so they are hard to see on the Light theme. I did not look into why.
+
+### Checking the blur
+
+1. Turn on Settings › Personalization › Colors › "Transparency effects".
+2. Choose Glass or Acrylic from the grip menu's Theme submenu (the tray picks up the setting at once).
+3. Expected: what is behind the tray is blurred, and the corners stay rounded. Hiding and showing
+   the tray fades a plain semi-transparent tray, and the blur comes back when it is fully shown.
+
+### Not tested in Phase 4
+
+- A visible blur or acrylic, and turning transparency effects on or off while the app runs (see above).
+- Windows 11, multiple monitors and mixed DPI.
+- Long or multi-line tooltips.
+
+### Phase 4: side effects on this machine
+
+- Screenshots of the tray and a margin around it, which caught parts of whatever was on screen at the
+  time, are kept in a temporary folder.
+- A striped window of my own was shown behind the tray, without activating it, for a few seconds at
+  a time, four times.
+- Hovering over and pressing a test icon, and choosing a theme from the grip menu with the keyboard,
+  in a temporary settings file. Smoke-test runs as before.
 
 ## Phase 3: scaling
 

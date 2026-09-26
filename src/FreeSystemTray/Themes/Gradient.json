@@ -1,0 +1,8 @@
+{
+  // The colours come from Gradient.xaml, a XAML resource dictionary: it can use anything WPF can
+  // draw, such as gradients, which theme files cannot. XAML can run code, so only use XAML you trust.
+  "name": "Gradient (XAML)",
+  "border": { "cornerRadius": 6 },
+  "icons": { "highlightCornerRadius": 3 },
+  "xaml": "Gradient.xaml"
+}

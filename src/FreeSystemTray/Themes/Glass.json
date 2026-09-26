@@ -1,0 +1,8 @@
+{
+  "name": "Glass",
+  "background": { "color": "#1C1C1C", "opacity": 0.55, "blur": "Blur" },
+  "border": { "color": "#40FFFFFF", "cornerRadius": 8 },
+  "grip": { "color": "#28FFFFFF" },
+  "icons": { "highlightCornerRadius": 4 },
+  "tooltip": { "background": "#202020", "border": "#50FFFFFF", "cornerRadius": 4 }
+}

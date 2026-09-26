@@ -19,6 +19,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The built-in themes: files next to the exe, read at run time. A theme's XAML is loose XAML
+         (XamlReader), not compiled into the app. -->
+    <Page Remove="Themes\**" />
+    <Content Include="Themes\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\FreeSystemTray.TrayHost\FreeSystemTray.TrayHost.csproj" />
   </ItemGroup>
 

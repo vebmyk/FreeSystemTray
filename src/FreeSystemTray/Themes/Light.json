@@ -1,0 +1,10 @@
+{
+  // Some apps' icons are white (Windows' own volume, network and battery icons were on the test
+  // machine) and hard to see on a light background.
+  "name": "Light",
+  "background": { "color": "#F3F3F3" },
+  "border": { "color": "#C8C8C8" },
+  "grip": { "color": "#DADADA" },
+  "icons": { "hover": "#1A000000", "pressed": "#33000000" },
+  "tooltip": { "background": "#FFFFFF", "foreground": "#1A1A1A", "border": "#C8C8C8" }
+}

@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using FreeSystemTray.Placement;
 using FreeSystemTray.Scaling;
 using FreeSystemTray.ShowHide;
+using FreeSystemTray.Theming;
 
 namespace FreeSystemTray.Settings
 {
@@ -27,6 +28,9 @@ namespace FreeSystemTray.Settings
 
         /// <summary>Icon size and the size of the tray around the icons.</summary>
         public ScalingSettings Scaling { get; set; } = new();
+
+        /// <summary>The theme's id: its file name without ".json", in the themes folder next to this file or among the built-in ones.</summary>
+        public string Theme { get; set; } = ThemeStore.DefaultId;
     }
 
     /// <summary>
@@ -181,6 +185,7 @@ namespace FreeSystemTray.Settings
             settings.Scaling.IconSize ??= "100%";
             settings.Scaling.TraySize ??= "100%";
             settings.Scaling.ExeIcons ??= new List<string>();
+            if (string.IsNullOrWhiteSpace(settings.Theme)) settings.Theme = ThemeStore.DefaultId;
             return settings;
         }
     }
