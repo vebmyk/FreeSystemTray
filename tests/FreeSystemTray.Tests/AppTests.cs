@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using FreeSystemTray.Placement;
+using FreeSystemTray.Scaling;
 using FreeSystemTray.Settings;
 using FreeSystemTray.ShowHide;
 using Xunit;
@@ -64,6 +65,33 @@ namespace FreeSystemTray.Tests
             Assert.Equal(TrayAnimation.Slide, loaded.Animation);
             Assert.Equal(300, loaded.AnimationMs);
             Assert.Contains("\"hotspot\": \"TopLeft\"", File.ReadAllText(File1));
+        }
+
+        [Fact]
+        public void Scaling_settings_survive_a_save_and_load_and_take_numbers_as_pixels()
+        {
+            var store = new SettingsStore(File1);
+            store.Save(new AppSettings
+            {
+                Scaling = new ScalingSettings
+                {
+                    IconSize = "167%", TraySize = "40px", SnapToPixels = false, IconScaling = IconScaling.NearestNeighbor,
+                    ExeIcons = { "Discord.exe" }
+                }
+            });
+            ScalingSettings loaded = store.Load().Scaling;
+            Assert.Equal("167%", loaded.IconSize);
+            Assert.Equal("40px", loaded.TraySize);
+            Assert.False(loaded.SnapToPixels);
+            Assert.Equal(IconScaling.NearestNeighbor, loaded.IconScaling);
+            Assert.Equal(new[] { "Discord.exe" }, loaded.ExeIcons);
+
+            File.WriteAllText(File1, "{ \"scaling\": { \"iconSize\": 24, \"traySize\": null, \"exeIcons\": null } }");
+            loaded = new SettingsStore(File1).Load().Scaling;
+            Assert.Equal("24", loaded.IconSize);
+            Assert.Equal("100%", loaded.TraySize);
+            Assert.Empty(loaded.ExeIcons);
+            Assert.True(loaded.SnapToPixels);
         }
 
         [Fact]

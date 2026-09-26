@@ -1,10 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
   End-to-end smoke test of FreeSystemTray against the real shell. Run it before every ManagedShell
-  upgrade and after changes to the tray host.
+  upgrade and after changes to the tray host, show/hide or scaling.
 
 .DESCRIPTION
-  Uses the Phase 0 test app (spike/TestTrayApp) and harness (spike/SpikeTool). It starts three test
+  Uses the Phase 0 test app (spike/TestTrayApp) and harness (spike/SpikeTool). It starts four test
   tray icons and FreeSystemTray in diagnostic mode, then checks:
     - taking the tray host role and keeping Explorer's taskbar always-on-top;
     - mirroring: tooltip changes, new icons and balloons reach Explorer's tray too;
@@ -15,6 +15,8 @@
     - show/hide: --hide, --show and --toggle; icons keep registering while the window is hidden; a
       settings file edit applies while running; with -SkipMouse left out also the hotspot, the
       hotkey, click-away, the auto-hide timer, and a menu opened from the tray keeping it shown;
+    - scaling: icon and tray sizes set in the settings file, snapping, .exe icons (a click on a
+      scaled icon with -SkipMouse left out);
     - with -SkipMouse left out: stepping behind a full-screen window (a new one, and one turning
       full screen like F11) and the hotkey bringing the tray up over it;
     - hand-back on a graceful exit and after the process is killed (watchdog).
@@ -336,6 +338,40 @@ try {
         Check "and is always-on-top again when that window leaves full screen" (Wait-Until { OnTop } 4000)
         [void]$fs.WaitForExit(15000)
     }
+
+    # --- Scaling: icon size and tray size, set in the settings file while the app runs --------
+    $before = (Read-State $run).window
+    $corner = "$([int]$before[0] + [int]$before[2]),$([int]$before[1] + [int]$before[3])"
+    function Corner { $w = (Read-State $run).window; return "$([int]$w[0] + [int]$w[2]),$([int]$w[1] + [int]$w[3])" }
+    function Test-Icons([scriptblock]$ok) { $s = Read-State $run; $mine = @($s.icons | Where-Object { $_.tip -like "Smoke*" }); return $mine.Count -ge 4 -and -not ($mine | Where-Object { -not (& $ok $_) }) }
+
+    Write-Settings '{ "scaling": { "iconSize": "200%" } }'
+    Check "icon size 200%: icons drawn at 32 px in 40 px cells, the size apps are told" (Wait-Until {
+        (Read-State $run).layout.iconSize -eq 32 -and (Test-Icons { param($i) $i.drawnPx -eq 32 -and $i.rect[2] -eq 40 -and $i.rect[3] -eq 40 }) } 5000)
+    Check "the window grows around its anchor corner" ((Corner) -eq $corner) "corner $(Corner), was $corner"
+    if (-not $SkipMouse) {
+        Idle
+        $b = Our-Icon $run "SmokeB"
+        $ourRect = "[$($b.rect[0]),$($b.rect[1]),$([int]$b.rect[0] + [int]$b.rect[2]),$([int]$b.rect[1] + [int]$b.rect[3])]"
+        Check "a click on a scaled icon reaches its app, which is told the scaled rectangle" ((Click-Icon $run "SmokeB" "left") -and
+            (Wait-Until { Log-Has "SmokeB" ("NIN_SELECT .*iconRect=" + [regex]::Escape($ourRect)) } 3000)) "expected iconRect=$ourRect"
+    }
+    Write-Settings '{ "scaling": { "iconSize": "24px", "traySize": "40px" } }'
+    Check "icon size 24px, tray size 40px: 24 px icons in 40 px cells" (Wait-Until {
+        Test-Icons { param($i) $i.drawnPx -eq 24 -and $i.rect[2] -eq 40 } } 5000)
+    Write-Settings '{ "scaling": { "iconSize": "167%", "snapToPixels": false } }'
+    Check "167% without snapping: the exact 26.72 px, drawn from a 27 px image" (Wait-Until {
+        (Read-State $run).layout.iconSize -eq 26.72 -and (Test-Icons { param($i) $i.drawnPx -eq 27 }) } 5000)
+    # TestTrayApp.exe has no icon of its own (its icons stay as they are); explorer.exe has one.
+    Write-Settings '{ "scaling": { "iconSize": "300%", "exeIcons": ["explorer.exe", "TestTrayApp.exe"] } }'
+    Check "exeIcons: Explorer's own tray icons are drawn from explorer.exe's icon at 48 px; an exe without one keeps its tray image" (Wait-Until {
+        $s = Read-State $run
+        $explorer = @($s.icons | Where-Object { $_.process -eq "explorer" -and $_.drawnPx })
+        $explorer.Count -gt 0 -and -not ($explorer | Where-Object { $_.drawnPx -ne 48 -or $_.drawnFromPx -ne 48 }) -and
+            (Test-Icons { param($i) $i.drawnPx -eq 48 -and $i.drawnFromPx -eq 16 }) } 5000)
+    Write-Settings '{ }'
+    Check "back to 100%: 16 px icons in 24 px cells, in the same place" ((Wait-Until { Test-Icons { param($i) $i.drawnPx -eq 16 -and $i.rect[2] -eq 24 } } 5000) -and
+        (Corner) -eq $corner) "corner $(Corner), was $corner"
 
     # --- Graceful exit ----------------------------------------------------------------------
     Post "SmokeC" 1

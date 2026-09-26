@@ -4,8 +4,8 @@ A free-standing system tray (notification area) for Windows: a small borderless 
 anywhere, showing the tray icons of running apps. Clicks, menus, tooltips and flyouts work as they do
 in Explorer's tray, and Explorer's own tray keeps working next to it.
 
-Status: Phases 1 and 2 of [PLAN.md](PLAN.md) (tray host, window and placement; show/hide), tested
-on Windows 10 22H2. Scaling and themes come in later phases. Findings from testing are in
+Status: Phases 1 to 3 of [PLAN.md](PLAN.md) (tray host, window and placement; show/hide; scaling), tested
+on Windows 10 22H2. Themes come in a later phase. Findings from testing are in
 [FINDINGS.md](FINDINGS.md).
 
 ## Build and run
@@ -77,6 +77,34 @@ The show/hide part of `settings.json`, with its defaults:
 | `hideOnClickAway` | Auto-hide: hide on a click outside the tray or a switch to another window. |
 | `animation` | `None`, `Fade`, or `Slide` (out through the tray's edge that faces the nearest screen edge). |
 
+### Size
+
+Two independent sizes: the icons, and everything around them (the padding in each icon's cell, the
+grip, the border and the margins). Each takes any value, as a percentage or in pixels; pixels are
+device-independent, so the tray has the same size on a 150% monitor as on a 100% one. The window
+grows or shrinks around its anchor corner.
+
+```json
+"scaling": {
+  "iconSize": "100%",
+  "traySize": "100%",
+  "snapToPixels": true,
+  "iconScaling": "Smooth",
+  "exeIcons": []
+}
+```
+
+| Setting | Values |
+|---|---|
+| `iconSize` | A percentage of 16 px (`"167%"`) or pixels (`"24px"`, or `24`). From 4 to 512 px. |
+| `traySize` | A percentage scales the padding, grip, border and margins (`"50%"` is compact). Pixels set each icon's cell (`"40px"`: 40×40 cells, the icon centred). Changing the icon size never changes it. |
+| `snapToPixels` | `true`: sizes are rounded to whole screen pixels, which is sharper but a little off (167% gives 27 px icons). `false`: exact sizes, somewhat softer. |
+| `iconScaling` | `Smooth` (bicubic) or `NearestNeighbor` (blocky, crisp at 200%, 300%, ...). |
+| `exeIcons` | Apps whose icons are drawn from their .exe's icon instead of the image they hand over: sharper at large sizes, but without status such as unread counts. Exe names (`"Discord.exe"`), full paths or icon ids. An exe without an icon keeps its tray image. |
+
+Apps hand over one small image per icon (16 to 48 px were seen); there is no larger one to ask for,
+so large sizes are upscaled from it.
+
 ### Command line
 
 | Option | Effect |
@@ -107,11 +135,11 @@ each workaround is needed.
 
 ## Smoke test
 
-Run it before every ManagedShell upgrade and after changes to the tray host or the show/hide code. It
+Run it before every ManagedShell upgrade and after changes to the tray host, show/hide or scaling. It
 builds the solution, starts four test tray icons and the app, and checks mirroring, the fix-ups, the
 query answers, clicks, showing and hiding (commands, the hidden state, a settings edit, hotspot,
 hotkey, click-away, the timer, a menu keeping the tray shown), stepping behind full-screen windows,
-and the hand-back to Explorer after an exit and after a kill (52 checks).
+icon and tray sizes, and the hand-back to Explorer after an exit and after a kill (59 checks).
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-SmokeTest.ps1
@@ -128,8 +156,8 @@ FreeSystemTray must not be running. The exit code is the number of failed checks
 | Path | What |
 |---|---|
 | `src/FreeSystemTray.TrayHost` | `ITrayHost` and its ManagedShell implementation: the only code that talks to the shell. |
-| `src/FreeSystemTray` | The WPF app: tray window, placement, show/hide (`ShowHide/`), settings, logging, watchdog. |
-| `tests/FreeSystemTray.Tests` | Unit tests: placement, message formats, routing and fix-up rules, settings, hotkeys, hotspots, auto-hide rules. |
+| `src/FreeSystemTray` | The WPF app: tray window, placement, show/hide (`ShowHide/`), scaling (`Scaling/`), settings, logging, watchdog. |
+| `tests/FreeSystemTray.Tests` | Unit tests: placement, message formats, routing and fix-up rules, settings, hotkeys, hotspots, auto-hide rules, full-screen tracking, sizes and icon resampling. |
 | `tests/smoke` | The end-to-end smoke test. |
 | `spike` | Phase 0 feasibility spike, the test tray app and the SpikeTool harness (see [spike/README.md](spike/README.md)). |
 

@@ -34,7 +34,7 @@ Verified in Phase 0 and Phase 1 on Windows 10 22H2 unless marked otherwise. Deta
 - Windows 10's own flyouts (network, volume, power) ignore the taskbar edge the host reports: they center on the tray or the icon and are then pushed inside the work area, so they overlap a free-floating window (Phase 1).
 - WPF lets a window be layered (and so fade or be see-through) only if it is created with `AllowsTransparency`; it strips `WS_EX_LAYERED` from any other window. The tray window is created that way (Phase 2).
 - Closing a Windows 10 flyout gives the foreground to Explorer's taskbar (Phase 2).
-- Icon images: each app hands over one `HICON`, usually 16 px at 100% scaling (some apps send 32 or 48 px). There is no larger version to ask for.
+- Icon images: each app hands over one `HICON`, usually 16 px at 100% scaling; 20, 32, 40 and 48 px were also seen at 100% (Phases 0 and 3). There is no larger version to ask for.
 - Reference implementations for the message formats: RetroBar, Cairo Desktop, ReactOS `explorer` (systray), Wine `explorer/systray.c`.
 
 ## Architecture
@@ -76,14 +76,12 @@ Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDIN
 - Follow-up (built): while a full-screen app is in front on the tray's monitor, the tray drops its always-on-top flag and stays behind it, as Explorer's taskbar does; the hotkey brings it up over it. Windows reports full-screen windows to shell hook windows (`FULLSCREENENTER`/`FULLSCREENEXIT`). See FINDINGS.md, "Phase 2 follow-up".
 - Not tested: multiple monitors and mixed DPI, non-Win32 menus of real apps (Discord, Qt apps) with auto-hide, a long run in auto-hide mode.
 
-### Phase 3: Scaling
-- Two independent settings: icon size and window/padding scale. Each accepts any value, as pixels or as a percentage of a base size (for example 167%). No preset steps and no upper or lower clamp beyond sanity limits.
-- Scale from the image the app hands over, at its native size (usually 16 px at 100% scaling; some apps send 32 or 48 px). There is no larger version to request, so large sizes will be upscaled and softer. Optional per-icon setting: use the app's .exe icon instead. It is sharper at large sizes, but it does not show status such as unread counts or connection state.
-- Options for how odd sizes are rendered:
-  - **Snap to whole pixels** toggle (`UseLayoutRounding`, `SnapsToDevicePixels`): sharper icons, slightly different size than requested.
-  - **Exact size** (snapping off): exact requested size, possibly softer.
-  - **Scaling mode:** high-quality smooth (bicubic) or nearest-neighbor. Nearest-neighbor suits integer multiples such as 200% and gives a pixel-art look.
-- Per-Monitor V2 DPI awareness via manifest. Test mixed-DPI setups and moving the window between monitors.
+### Phase 3: Scaling (done)
+Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDINGS.md` (Phase 3); the settings are in `README.md` ("Size").
+- Built: `iconSize` and `traySize`, each any value as a percentage or in (device-independent) pixels, independent of each other. A tray-size percentage scales everything around the icons (cell padding, grip, border, margins); tray-size pixels set the cell size. Sanity limits only: icons 4 to 512 px, the grip at least 4 px.
+- Icons are scaled from the app's image at its native size (16 to 48 px seen) to the exact screen pixels they cover, by our own bicubic (Catmull-Rom) or nearest-neighbour resampler, because WPF has no bicubic filter. With `snapToPixels` they are drawn 1:1; without it at the exact size, softer. `exeIcons` draws chosen apps' icons from their .exe instead.
+- Per-Monitor V2 was already in the manifest; icons are scaled again when the DPI changes.
+- Not tested: mixed DPI and moving the tray between monitors (one monitor at 100% here). FINDINGS.md, Phase 3, says how to check it.
 
 ### Phase 4: Appearance and themes
 - Data-driven WPF templates: background color/opacity, blur/acrylic, corner radius, border, icon spacing, orientation (row, column, grid with N columns), hover/pressed effects, tooltip styling.
@@ -135,8 +133,8 @@ Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDIN
 Source repo with a README, build instructions, a sample theme set, `FINDINGS.md` from Phase 0 (done), the smoke test (`tests/smoke`, built on the Phase 0 test app and harness in `spike/`), and a short test checklist of the apps tested in Phase 0 (in `FINDINGS.md`) and Phase 6.
 
 ## Instructions to the implementer
-- Phases 0, 1 and 2 are done (`FINDINGS.md`). Wait for approval before starting Phase 3.
+- Phases 0 to 3 are done (`FINDINGS.md`). Wait for approval before starting Phase 4.
 - Have real tray apps running during testing, and state which Windows version and build you are testing on.
-- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture. Run the smoke test (`tests/smoke`) after changes to the tray host or to show/hide, and before every ManagedShell upgrade.
+- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture. Run the smoke test (`tests/smoke`) after changes to the tray host, show/hide or scaling, and before every ManagedShell upgrade.
 - Keep tray host logic behind `ITrayHost` and separate from the UI.
 - Explorer's tray must keep working while our app runs, after it exits, and after it crashes.

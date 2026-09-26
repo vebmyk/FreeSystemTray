@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FreeSystemTray.Placement;
+using FreeSystemTray.Scaling;
 using FreeSystemTray.ShowHide;
 
 namespace FreeSystemTray.Settings
@@ -22,6 +24,43 @@ namespace FreeSystemTray.Settings
 
         /// <summary>When the window shows and hides, and how.</summary>
         public ShowHideSettings ShowHide { get; set; } = new();
+
+        /// <summary>Icon size and the size of the tray around the icons.</summary>
+        public ScalingSettings Scaling { get; set; } = new();
+    }
+
+    /// <summary>
+    /// The two sizes are independent: changing one never changes the other. Both take a percentage
+    /// ("167%") or pixels ("24px", or a number); pixels are device-independent, so the tray has the
+    /// same size on a 150% monitor as on a 100% one.
+    /// </summary>
+    public sealed class ScalingSettings
+    {
+        /// <summary>The icons' size. 100% is 16 px.</summary>
+        [JsonConverter(typeof(StringOrNumberConverter))]
+        public string IconSize { get; set; } = "100%";
+
+        /// <summary>
+        /// Everything around the icons: the padding in each icon's cell, the grip, the border and the
+        /// margins. A percentage scales all of it; pixels set the size of each icon's cell.
+        /// </summary>
+        [JsonConverter(typeof(StringOrNumberConverter))]
+        public string TraySize { get; set; } = "100%";
+
+        /// <summary>
+        /// Round sizes to whole screen pixels: sharper, but a little off the requested size. Off gives
+        /// the exact size, somewhat softer.
+        /// </summary>
+        public bool SnapToPixels { get; set; } = true;
+
+        public IconScaling IconScaling { get; set; } = IconScaling.Smooth;
+
+        /// <summary>
+        /// Icons drawn with their app's .exe icon instead of the image the app hands over: sharper at
+        /// large sizes, but without status such as unread counts. Exe file names ("Discord.exe"), full
+        /// paths or icon ids.
+        /// </summary>
+        public List<string> ExeIcons { get; set; } = new();
     }
 
     /// <summary>
@@ -138,6 +177,10 @@ namespace FreeSystemTray.Settings
         {
             AppSettings settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
             settings.ShowHide ??= new ShowHideSettings(); // "showHide": null
+            settings.Scaling ??= new ScalingSettings();
+            settings.Scaling.IconSize ??= "100%";
+            settings.Scaling.TraySize ??= "100%";
+            settings.Scaling.ExeIcons ??= new List<string>();
             return settings;
         }
     }

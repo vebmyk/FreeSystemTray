@@ -1,7 +1,83 @@
 # Findings
 
-Phase 2 (show/hide) comes first, then Phase 1 (production tray host, window and placement). The
-Phase 0 feasibility report follows unchanged, apart from notes where Phase 1 corrected it.
+The newest phase comes first: Phase 3 (scaling), Phase 2 (show/hide), Phase 1 (production tray host,
+window and placement). The Phase 0 feasibility report follows unchanged, apart from notes where
+Phase 1 corrected it.
+
+## Phase 3: scaling
+
+Date: 2026-09-26. Same machine and setup as before (Windows 10 Pro 22H2, build 19045.7725, one
+1920×1080 monitor at 100%, ManagedShell 0.0.374 on .NET 10). The settings are described in
+[README.md](README.md), "Size".
+
+### Phase 3 verdict
+
+**Icon size and tray size work, each at any value, and independently.** Unit tests (172) and the
+smoke test (59 checks, 7 of them new) pass. Screenshots at 75%, 100%, 167% (snapped and exact), 200%
+(smooth and nearest-neighbour) and 300% look as intended: nearest-neighbour at 200% is crisp and
+blocky, smooth is soft, and exact sizes are a little softer than snapped ones.
+
+Not tested: **mixed DPI and moving the tray between monitors**, because this machine has one monitor
+at 100% and changing Windows' display scaling is a setting I leave alone. How to check it is under
+[Checking scaling at other DPIs](#checking-scaling-at-other-dpis).
+
+### What Phase 3 built
+
+- Settings `iconSize` and `traySize` (a percentage, or pixels), `snapToPixels`, `iconScaling`
+  (`Smooth` or `NearestNeighbor`) and `exeIcons`, applied while the app runs.
+- `TrayLayout`: the sizes of the icon, its cell, the grip, the border and the margins. A tray-size
+  percentage scales everything but the icons; tray-size pixels set the cell, and the padding is what
+  the icon leaves free. Limits only for sanity: icons from 4 to 512 px, and a grip at least 4 px wide
+  so the tray can still be dragged.
+- `IconResampler`: bicubic (Catmull-Rom) or nearest-neighbour scaling of the app's image to the exact
+  number of screen pixels it covers, on premultiplied pixels (no dark fringe at transparent edges),
+  with the filter widened when shrinking. `ScaledIcon` draws it 1:1 when snapped, and scales it again
+  when the DPI changes.
+- `exeIcons`: the icon of the app's .exe, extracted at the drawn size (`SHDefExtractIcon`).
+- `state.json` lists the layout, and for each icon the pixels it was drawn at and the size of its source.
+
+### Phase 3 results
+
+| Check | Result |
+|---|---|
+| 200%, 24px icons in 40px cells, 75%, 300% with a 50% tray | ✅ Drawn at 32, 24, 12 and 48 screen pixels; cells and the rectangles apps are told match. |
+| 167% | ✅ Snapped: drawn at 27 px. Exact: 26.72 px, drawn from a 27 px image. |
+| Window size | ✅ Grows and shrinks around its anchor corner (the bottom-right corner stayed put through every change). |
+| Clicks at 200% | ✅ Reach the app, which is told the scaled rectangle. |
+| `exeIcons` | ✅ Directory Opus, Listary, Launchy, PowerToys and Google Drive drawn from their 48 px .exe icons at 300%, noticeably sharper. An exe without an icon (TestTrayApp) keeps its tray image. |
+| Invalid values | ✅ `"big"` is logged and 100% used; a bare number is pixels. |
+
+### Phase 3 findings
+
+1. **Apps hand over 16, 20, 40 and 48 px images here**, not only 16 and 32 as in Phase 0, although
+   the system DPI is 96: Listary, Directory Opus and Explorer's Bluetooth icon send 20 px, PowerToys,
+   Command Palette and Google Drive 40 px, PowerToys Awake 48 px. ManagedShell converts them at their
+   own size. Most likely some apps size their icons from a DPI they saw earlier. So at 100% the tray
+   also shrinks icons (40 to 16 px), which is why the resampler widens its filter when shrinking.
+2. **WPF has no bicubic scaling**: its "HighQuality" mode is the Fant filter. Hence the tray scales
+   the images itself and lets WPF draw them 1:1.
+3. **Layout rounding also rounds element sizes**, not only positions: with `snapToPixels`, 167% icons
+   (26.72 px) are 27 screen pixels and their cells 35. That is the "slightly different size" the plan
+   expected.
+4. **`SHDefExtractIcon` returns `S_FALSE` for an exe without an icon resource** (a .NET app without
+   `ApplicationIcon`, such as TestTrayApp). The tray then keeps the app's own image.
+
+### Checking scaling at other DPIs
+
+Not done by me, because it means changing a Windows setting or connecting a second monitor:
+
+1. Set Settings › System › Display › "Scale" to 150% (or connect a monitor with another scale).
+2. Start FreeSystemTray with `--diag DIR` and `"iconSize": "200%"`.
+3. Expected: the tray looks the same size as before in inches; `state.json` shows `drawnPx` 48 (32 × 1.5)
+   and cells of 60 screen pixels; the icons stay sharp. Dragging the tray to a monitor with another
+   scale resizes it there, and `drawnPx` follows.
+
+### Phase 3: side effects on this machine
+
+- None beyond the smoke-test runs (the same simulated input and full-screen windows as in Phase 2, and
+  one more "Balloon from SmokeA" notification in Action Center per run) and screenshots of the tray
+  window, kept in a temporary folder. During the `exeIcons` check, Explorer's own tray icons were
+  briefly drawn with Explorer's icon in our window.
 
 ## Phase 2: show/hide
 

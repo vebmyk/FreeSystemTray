@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -10,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using FreeSystemTray.Logging;
 using FreeSystemTray.Placement;
+using FreeSystemTray.Scaling;
 using FreeSystemTray.Settings;
 using FreeSystemTray.ShowHide;
 using FreeSystemTray.TrayHost;
@@ -25,7 +27,6 @@ namespace FreeSystemTray
     public partial class TrayWindow : Window
     {
         public const string WindowTitle = "FreeSystemTray";
-        private const double IconSize = 16;
 
         private readonly ITrayHost _host;
         private readonly SettingsStore _store;
@@ -51,8 +52,7 @@ namespace FreeSystemTray
             InitializeComponent();
             Title = WindowTitle;
 
-            Resources["IconSize"] = IconSize;
-            Resources["CellSize"] = Math.Max(24, IconSize + 8);
+            ApplyScaling(settings.Scaling);
             IconList.ItemsSource = host.Icons;
             ((INotifyCollectionChanged)host.Icons).CollectionChanged += Icons_CollectionChanged;
 
@@ -136,6 +136,59 @@ namespace FreeSystemTray
             UpdateGrip();
             QueuePlacement();
             ShowHide?.ApplySettings(settings.ShowHide);
+            ApplyScaling(settings.Scaling);
+        }
+
+        /// <summary>The sizes in use, from the scaling settings.</summary>
+        internal TrayLayout Layout { get; private set; } = TrayLayout.Default;
+
+        /// <summary>
+        /// Sizes the icons and everything around them, and sets how icons are scaled and whether sizes
+        /// snap to whole screen pixels. The window then resizes itself around its anchor corner.
+        /// </summary>
+        private void ApplyScaling(ScalingSettings s)
+        {
+            TrayLayout layout = TrayLayout.Compute(ParseSize(s.IconSize, "iconSize"), ParseSize(s.TraySize, "traySize"));
+            Layout = layout;
+            Resources["IconSize"] = layout.IconSize;
+            Resources["CellSize"] = layout.CellSize;
+            Resources["GripWidth"] = layout.GripWidth;
+            Resources["TrayBorder"] = new Thickness(layout.BorderThickness);
+            Resources["IconListMargin"] = new Thickness(layout.MarginAlong, layout.MarginAcross, layout.MarginAlong, layout.MarginAcross);
+            UseLayoutRounding = s.SnapToPixels;
+            SnapsToDevicePixels = s.SnapToPixels;
+            ScaledIcon.SetOptions(IconList, new IconRenderOptions(s.IconScaling, s.SnapToPixels, s.ExeIcons.ToArray()));
+            AppLog.Write($"Scaling: icons {layout.IconSize:0.##} px ({s.IconSize}) in {layout.CellSize:0.##} px cells (tray size {s.TraySize}), " +
+                         $"{s.IconScaling}, {(s.SnapToPixels ? "snapped to whole pixels" : "exact sizes")}" +
+                         (s.ExeIcons.Count > 0 ? $", exe icons for {string.Join(", ", s.ExeIcons)}" : ""));
+        }
+
+        /// <summary>The element drawing an icon, if its cell exists (diagnostics).</summary>
+        internal ScaledIcon? IconElementOf(ITrayIcon icon) =>
+            IconList.ItemContainerGenerator.ContainerFromItem(icon) is DependencyObject container ? FindDescendant<ScaledIcon>(container) : null;
+
+        private static T? FindDescendant<T>(DependencyObject parent) where T : DependencyObject
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T found) return found;
+                if (FindDescendant<T>(child) is T deeper) return deeper;
+            }
+            return null;
+        }
+
+        private static SizeValue ParseSize(string text, string setting)
+        {
+            try
+            {
+                return SizeValue.Parse(text);
+            }
+            catch (FormatException ex)
+            {
+                AppLog.Write($"Setting {setting}: {ex.Message}; using 100%");
+                return SizeValue.Percent(100);
+            }
         }
 
         /// <summary>The tray window of another running instance, if any.</summary>

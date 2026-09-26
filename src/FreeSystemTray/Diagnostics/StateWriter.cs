@@ -58,6 +58,12 @@ namespace FreeSystemTray.Diagnostics
                 ["autoHide"] = _window.ShowHide?.AutoHide,
                 ["hotkey"] = _window.ShowHide?.Hotkey?.ToString(),
                 ["hotspot"] = hotspot.IsEmpty ? null : new[] { hotspot.Left, hotspot.Top, hotspot.Width, hotspot.Height },
+                ["layout"] = new Dictionary<string, double>
+                {
+                    ["iconSize"] = _window.Layout.IconSize,
+                    ["cellSize"] = _window.Layout.CellSize,
+                    ["thickness"] = _window.Layout.Thickness
+                },
                 ["shell"] = Shell(),
                 ["iconCount"] = _host.Icons.Count,
                 ["icons"] = _host.Icons.Select(Describe).ToList(),
@@ -129,6 +135,12 @@ namespace FreeSystemTray.Diagnostics
                 d["windowAlive"] = NativeMethods.IsWindow(ni.HWnd);
             }
             if (icon.Image is BitmapSource bs) d["iconPx"] = $"{bs.PixelWidth}x{bs.PixelHeight}";
+            // What the tray drew: the screen pixels, and the source (the app's image or its .exe icon).
+            if (_window.IconElementOf(icon) is { DrawnPixels: > 0 } drawn)
+            {
+                d["drawnPx"] = drawn.DrawnPixels;
+                d["drawnFromPx"] = drawn.SourcePixels;
+            }
             if (_window.IconBounds.TryGetValue(icon, out PixelRect r)) d["rect"] = new[] { r.Left, r.Top, r.Width, r.Height };
             return d;
         }
