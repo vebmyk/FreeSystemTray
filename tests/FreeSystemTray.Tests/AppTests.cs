@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using FreeSystemTray.Placement;
 using FreeSystemTray.Scaling;
@@ -228,6 +228,30 @@ namespace FreeSystemTray.Tests
             CommandLine o = CommandLine.Parse(new[] { "--watchdog", "1234", "134348440313089427" });
             Assert.Equal(1234, o.WatchdogPid);
             Assert.Equal(134348440313089427, o.WatchdogStartTime);
+            Assert.Equal(0, o.WatchdogRestarts);
+            Assert.Empty(o.AppArgs);
+        }
+
+        [Fact]
+        public void The_watchdog_keeps_the_apps_arguments_after_the_separator()
+        {
+            CommandLine o = CommandLine.Parse(new[] { "--watchdog", "1", "2", "--log-dir", @"C:\logs", "--restarts", "2", "--",
+                "--settings", @"C:\s.json", "--bogus-for-the-watchdog" });
+            Assert.Equal(2, o.WatchdogRestarts);
+            Assert.Equal(@"C:\logs", o.EffectiveLogDir);
+            Assert.Null(o.SettingsPath);
+            Assert.Equal(new[] { "--settings", @"C:\s.json", "--bogus-for-the-watchdog" }, o.AppArgs);
+        }
+
+        [Fact]
+        public void Started_again_after_a_crash_and_the_test_commands()
+        {
+            CommandLine o = CommandLine.Parse(new[] { "--diag", @"C:\d", "--after-crash", "3" });
+            Assert.Equal(3, o.AfterCrash);
+            Assert.Equal(new[] { "--diag", @"C:\d", "--after-crash", "3" }, o.Args);
+            Assert.Equal(new[] { "--diag", @"C:\d" }, CommandLine.WithoutAfterCrash(o.Args));
+            Assert.True(CommandLine.Parse(new[] { "--debug-crash" }).DebugCrash);
+            Assert.Equal(30, CommandLine.Parse(new[] { "--debug-hang", "30" }).DebugHangSeconds);
         }
 
         [Theory]
@@ -237,5 +261,42 @@ namespace FreeSystemTray.Tests
         {
             Assert.Throws<ArgumentException>(() => CommandLine.Parse(new[] { arg }));
         }
+    }
+
+    public class CrashPolicyTests
+    {
+        [Theory]
+        [InlineData(0xE0434352u, true)]   // unhandled .NET exception
+        [InlineData(0xC0000005u, true)]   // access violation
+        [InlineData(0xC0000409u, true)]   // fail fast
+        [InlineData(0x48414E47u, true)]   // ended by the watchdog while hung
+        [InlineData(1u, false)]           // Task Manager's End task, taskkill /f
+        [InlineData(0xFFFFFFFFu, false)]  // Stop-Process, TerminateProcess(-1)
+        [InlineData(0xC000013Au, false)]  // Ctrl+C
+        [InlineData(3u, false)]           // could not take the tray host role
+        public void Only_crashes_are_crashes(uint exitCode, bool crash) => Assert.Equal(crash, CrashPolicy.IsCrash(exitCode));
+
+        [Fact]
+        public void A_crash_is_started_again_up_to_three_times_in_a_row_while_it_keeps_crashing_soon()
+        {
+            TimeSpan soon = TimeSpan.FromSeconds(30);
+            Assert.True(CrashPolicy.ShouldRestart(CrashPolicy.ClrExceptionCode, soon, 0, out int next, out _));
+            Assert.Equal(1, next);
+            Assert.True(CrashPolicy.ShouldRestart(CrashPolicy.ClrExceptionCode, soon, 2, out next, out _));
+            Assert.Equal(3, next);
+            Assert.False(CrashPolicy.ShouldRestart(CrashPolicy.ClrExceptionCode, soon, 3, out _, out string why));
+            Assert.Contains("4 times", why);
+        }
+
+        [Fact]
+        public void A_tray_that_ran_a_while_starts_the_count_over()
+        {
+            Assert.True(CrashPolicy.ShouldRestart(CrashPolicy.HungExitCode, TimeSpan.FromHours(2), 3, out int next, out _));
+            Assert.Equal(1, next);
+        }
+
+        [Fact]
+        public void An_ended_process_is_not_started_again() =>
+            Assert.False(CrashPolicy.ShouldRestart(1, TimeSpan.FromHours(2), 0, out _, out _));
     }
 }

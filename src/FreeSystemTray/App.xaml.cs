@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Interop;
 using FreeSystemTray.Diagnostics;
 using FreeSystemTray.Logging;
 using FreeSystemTray.Settings;
@@ -18,6 +20,9 @@ namespace FreeSystemTray
     public partial class App : Application
     {
         private const string SingleInstanceName = "FreeSystemTray.SingleInstance";
+
+        /// <summary>--debug-crash (wParam 1) and --debug-hang (wParam 2, lParam seconds), for an instance started with --diag.</summary>
+        private static readonly uint DebugMessage = NativeMethods.RegisterWindowMessage("FreeSystemTray.Debug");
 
         private readonly CommandLine _options;
         private Mutex? _singleInstance;
@@ -58,6 +63,11 @@ namespace FreeSystemTray
                 Shutdown(RunThemeCommand() ? 0 : 1);
                 return;
             }
+            if (_options.DebugCrash || _options.DebugHangSeconds != null)
+            {
+                Shutdown(SendDebugCommand() ? 0 : 1);
+                return;
+            }
 
             _singleInstance = new Mutex(true, SingleInstanceName, out bool created);
             if (!created)
@@ -87,6 +97,10 @@ namespace FreeSystemTray
                 AppLog.Write("Unhandled exception: " + ex.ExceptionObject);
                 AppLog.Flush(TimeSpan.FromSeconds(2));
             };
+            TaskScheduler.UnobservedTaskException += (_, ex) => AppLog.Write("Unobserved exception in a background task: " + ex.Exception);
+            // WPF shuts the app down when the session ends (sign-out, shutdown); OnExit hands the tray back.
+            SessionEnding += (_, ex) => AppLog.Write($"Windows is ending the session ({ex.ReasonSessionEnding}); exiting");
+            if (_options.AfterCrash > 0) AppLog.Write($"Started again by the watchdog after a crash ({_options.AfterCrash} in a row)");
 
             ShellLogger.Severity = _options.Verbose ? LogSeverity.Debug : LogSeverity.Info;
             ShellLogger.Log += (_, le) =>
@@ -141,8 +155,12 @@ namespace FreeSystemTray
                 else _appIcon.Hide();
             };
 
-            if (_options.DiagDir != null) _stateWriter = new StateWriter(_host, window, _options.DiagDir, () => _appIcon.IsShown, () => _settingsWindow);
-            if (!_options.NoWatchdog) Watchdog.Launch(logDir);
+            if (_options.DiagDir != null)
+            {
+                _stateWriter = new StateWriter(_host, window, _options.DiagDir, () => _appIcon.IsShown, () => _settingsWindow);
+                HwndSource.FromHwnd(new WindowInteropHelper(window).EnsureHandle())?.AddHook(DebugHook);
+            }
+            if (!_options.NoWatchdog) Watchdog.Launch(logDir, _options.Args, _options.AfterCrash);
         }
 
         /// <summary>Opens the settings window, or brings it to the front; at an icon if <paramref name="iconKey"/> is given.</summary>
@@ -275,6 +293,35 @@ namespace FreeSystemTray
                 AppLog.Write($"Theme command failed: {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>--debug-crash, --debug-hang: posted to the running instance, which acts on them only with --diag.</summary>
+        private bool SendDebugCommand()
+        {
+            IntPtr window = TrayWindow.FindRunningInstance();
+            bool sent = window != IntPtr.Zero && NativeMethods.PostMessage(window, (int)DebugMessage,
+                (IntPtr)(_options.DebugCrash ? 1 : 2), (IntPtr)(_options.DebugHangSeconds ?? 0));
+            AppLog.Write($"{(_options.DebugCrash ? "--debug-crash" : "--debug-hang")}: {(sent ? "sent" : "could not send")} to the running instance");
+            return sent;
+        }
+
+        /// <summary>Test commands for the watchdog: crash with an unhandled exception, or stop answering.</summary>
+        private IntPtr DebugHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg != DebugMessage || DebugMessage == 0) return IntPtr.Zero;
+            handled = true;
+            if (wParam.ToInt32() == 1)
+            {
+                AppLog.Write("--debug-crash: crashing on purpose");
+                Dispatcher.BeginInvoke(new Action(() => throw new InvalidOperationException("--debug-crash: a crash to test the watchdog")));
+            }
+            else
+            {
+                int seconds = lParam.ToInt32();
+                AppLog.Write($"--debug-hang: not answering for {seconds} s");
+                Dispatcher.BeginInvoke(() => Thread.Sleep(TimeSpan.FromSeconds(seconds)));
+            }
+            return IntPtr.Zero;
         }
 
         /// <summary>--toggle, --show, --hide, --open-settings: posted to the running instance's tray window.</summary>

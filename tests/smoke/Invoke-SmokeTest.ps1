@@ -36,7 +36,11 @@
       NIF_SHOWTIP gets NIN_POPUPOPEN after the hover delay and no tooltip, NIN_POPUPCLOSE when the
       pointer leaves, a button goes down or the tray hides; no WM_MOUSEHOVER or WM_MOUSELEAVE;
     - hand-back on a graceful exit and after the process is killed (watchdog), FreeSystemTray's own
-      icon leaving Explorer's tray both times.
+      icon leaving Explorer's tray both times; not started again after being killed on purpose;
+    - crash safety (Phase 6): after a real crash (an unhandled exception, --debug-crash) the watchdog
+      hands the tray back and starts FreeSystemTray again; a tray that stops answering (--debug-hang)
+      is ended by the watchdog after about 25 s and started again. While it hangs, apps' icon
+      messages to it fail, and the tray window does not redraw.
   The balloon check shows a real Windows notification ("Balloon from SmokeA").
   The mouse and keyboard checks move the real mouse and press the tray's hotkey (Ctrl+Alt+Shift+T)
   and Esc, and the full-screen checks cover the primary screen with a black window for up to 8 s.
@@ -666,6 +670,27 @@ try {
     Check "after a crash, Explorer has the latest tooltip" (Wait-Until { (Explorer-Tip "SmokeC") -eq "SmokeC tip #2" } 5000) "Explorer: $(Explorer-Tip 'SmokeC')"
     Check "after a crash, Explorer's taskbar is always-on-top" (Explorer-Topmost)
     Check "after a crash, the watchdog removes FreeSystemTray's own (dead) icon from Explorer's tray" (Wait-Until { -not (Explorer-Has-Ours) } 5000)
+    Check "killed on purpose, it is not started again" (Wait-Until { Select-String -Path (Join-Path $crash "watchdog.log") -Pattern "Not starting FreeSystemTray again: it did not crash" -Quiet } 5000)
+
+    # --- Crash safety: a real crash and a hang (Phase 6) --------------------------------------
+    $cs = Join-Path $OutDir "crashsafety"
+    $proc = Start-App $cs
+    $first = (Read-State $cs).pid
+    Start-Process -FilePath $app -ArgumentList "--debug-crash --log-dir `"$cs\cmd`"" -Wait | Out-Null
+    Check "a real crash: the watchdog hands the tray back and starts FreeSystemTray again, which takes the role" ((Wait-Until {
+        Select-String -Path (Join-Path $cs "watchdog.log") -Pattern "Started FreeSystemTray again after the crash" -Quiet } 10000) -and
+        (Wait-Until { $s = Read-State $cs; $s.pid -ne $first -and $s.shell.weAreHost -and $s.iconCount -gt 0 } 15000))
+    Check "the log has the exception, and the new instance knows it was started again after a crash" ((Select-String -Path (Join-Path $cs "FreeSystemTray.log") -Pattern "Unhandled exception.*--debug-crash" -Quiet) -and
+        (Select-String -Path (Join-Path $cs "FreeSystemTray.log") -Pattern "Started again by the watchdog after a crash \(1 in a row\)" -Quiet) -and
+        (Select-String -Path (Join-Path $cs "watchdog.log") -Pattern "exit code 0xE0434352" -Quiet))
+    $second = (Read-State $cs).pid
+    Start-Sleep -Milliseconds 1000
+    Start-Process -FilePath $app -ArgumentList "--debug-hang 120 --log-dir `"$cs\cmd`"" -Wait | Out-Null
+    Check "a tray that stops answering: the watchdog ends it after about 25 s, hands the tray back and starts it again" ((Wait-Until {
+        Select-String -Path (Join-Path $cs "watchdog.log") -Pattern "is hung" -Quiet } 60000) -and
+        (Wait-Until { $s = Read-State $cs; $s.pid -ne $second -and $s.shell.weAreHost -and $s.iconCount -gt 0 } 20000)) ((Select-String -Path (Join-Path $cs "watchdog.log") -Pattern "answer|hung|Started" | Select-Object -Last 3 | ForEach-Object { $_.Line }) -join "; ")
+    Check "after the restarts, Explorer's tray is still complete" ((Explorer-Tip "SmokeA") -and (Explorer-Tip "SmokeB") -and (Explorer-Tip "SmokeC"))
+    Check "and a graceful exit of the restarted tray returns 0" ((Stop-App $cs) -eq 0)
 }
 finally {
     if (Get-Process FreeSystemTray -ErrorAction SilentlyContinue) { [void](Stop-App (Join-Path $OutDir "cleanup")) }

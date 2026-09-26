@@ -38,6 +38,12 @@ namespace FreeSystemTray.Settings
 
         /// <summary>Show FreeSystemTray's own icon, with its menu and settings, in the tray (and in Explorer's).</summary>
         public bool AppIcon { get; set; } = true;
+
+        /// <summary>
+        /// After a crash (not when ended on purpose), the watchdog starts FreeSystemTray again, unless it
+        /// keeps crashing soon after it starts. The watchdog reads this from the file when it happens.
+        /// </summary>
+        public bool RestartAfterCrash { get; set; } = true;
     }
 
     /// <summary>

@@ -20,8 +20,8 @@ namespace FreeSystemTray
                 return 2;
             }
 
-            if (options.WatchdogPid is int pid)
-                return Watchdog.Run(pid, options.WatchdogStartTime, options.EffectiveLogDir);
+            if (options.WatchdogPid != null)
+                return Watchdog.Run(options);
             return RunApp(options);
         }
 

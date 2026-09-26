@@ -218,6 +218,8 @@
                             <TextBlock x:Name="AutostartStatus" Style="{StaticResource Hint}" Margin="20,0,0,0" />
                             <CheckBox x:Name="AppIconBox" Content="Show FreeSystemTray's own _icon (its menu and these settings)" Click="AppIconBox_Click" />
                             <TextBlock Style="{StaticResource Hint}" Margin="20,0,0,0" Text="It also shows in Explorer's tray, so the settings can be reached while the tray is hidden. Right-clicking the tray's grip always opens its menu." />
+                            <CheckBox x:Name="RestartAfterCrashBox" Content="Start FreeSystemTray again if it _crashes" Click="RestartAfterCrashBox_Click" />
+                            <TextBlock Style="{StaticResource Hint}" Margin="20,0,0,0" Text="Not when it is ended on purpose, and not if it keeps crashing soon after it starts. Explorer's tray gets the icons back either way." />
                         </StackPanel>
                     </GroupBox>
                     <GroupBox Header="Position">

@@ -109,6 +109,7 @@ namespace FreeSystemTray
 
                 LoadAutostart();
                 AppIconBox.IsChecked = s.AppIcon;
+                RestartAfterCrashBox.IsChecked = s.RestartAfterCrash;
                 LockBox.IsChecked = s.LockPosition;
                 SnapBox.IsChecked = s.SnapToEdges;
                 FilesText.Text = $"Settings: {_tray.SettingsPath}\nThemes: {_tray.Themes.UserDirectory}\nLogs: {Path.GetDirectoryName(AppLog.FilePath)}";
@@ -464,6 +465,8 @@ namespace FreeSystemTray
         }
 
         private void AppIconBox_Click(object sender, RoutedEventArgs e) => Change(s => s.AppIcon = AppIconBox.IsChecked == true);
+
+        private void RestartAfterCrashBox_Click(object sender, RoutedEventArgs e) => Change(s => s.RestartAfterCrash = RestartAfterCrashBox.IsChecked == true);
 
         private void LockBox_Click(object sender, RoutedEventArgs e) => Change(s => s.LockPosition = LockBox.IsChecked == true);
 
