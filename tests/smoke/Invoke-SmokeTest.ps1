@@ -21,11 +21,19 @@
       edits, --export-theme and --import-theme;
     - with -SkipMouse left out: stepping behind a full-screen window (a new one, and one turning
       full screen like F11) and the hotkey bringing the tray up over it;
-    - hand-back on a graceful exit and after the process is killed (watchdog).
+    - management: FreeSystemTray's own icon in both trays; icon rules (hidden icons, hidden, a
+      tooltip), an icon Windows hides, the default placement, the saved order and a tray size limit;
+      with -SkipMouse left out also the hidden-icons flyout (open, click an icon in it, close),
+      dragging icons (to a new place, onto the chevron) and Shift+right-click's menu; the settings
+      window (--open-settings, and starting the exe a second time);
+    - hand-back on a graceful exit and after the process is killed (watchdog), FreeSystemTray's own
+      icon leaving Explorer's tray both times.
   The balloon check shows a real Windows notification ("Balloon from SmokeA").
   The mouse and keyboard checks move the real mouse and press the tray's hotkey (Ctrl+Alt+Shift+T)
   and Esc, and the full-screen checks cover the primary screen with a black window for up to 8 s.
-  Before each one the test waits until nobody has touched mouse or keyboard for 1.5 s.
+  Before each one the test waits until nobody has touched mouse or keyboard for 1.5 s. Near the end
+  the settings window opens (and takes the keyboard focus) until the test closes the app.
+  Explorer is told to hide one test icon for a moment (as Windows hides Meet Now).
 
   Tested on Windows 10 22H2 with "Always show all icons" off. FreeSystemTray must not be running.
   Exit code: the number of failed checks.
@@ -412,6 +420,87 @@ try {
     Check "back to Dark: one row of 24 px cells, in the same place" ((Wait-Until { (Theme-State).id -eq "Dark" -and (Test-Icons { param($i) $i.rect[2] -eq 24 }) -and
         @(Smoke-Rects | ForEach-Object { $_[1] } | Sort-Object -Unique).Count -eq 1 } 5000) -and (Corner) -eq $corner) "corner $(Corner), was $corner"
 
+    # --- Management: the app's own icon, icon rules, the flyout, dragging, the settings window --
+    function Smoke([string]$name) { Our-Icon $run $name }
+    function Tray-Count { @((Read-State $run).icons | Where-Object { $_.placement -eq "Tray" }).Count }
+    function Saved-Icons { (Get-Content (Join-Path $OutDir "settings.json") -Raw | ConvertFrom-Json).icons }
+    function Explorer-Has-Ours { [bool](Tool explorer-icons | Select-String "'FreeSystemTray' owner=") }
+    function Center([object]$r) { return @(([int]$r[0] + [int]([int]$r[2] / 2)), ([int]$r[1] + [int]([int]$r[3] / 2))) }
+    $mine = (Read-State $run).icons | Where-Object { $_.path -like "*\FreeSystemTray.exe" } | Select-Object -First 1
+    Check "FreeSystemTray's own icon is in the tray and in Explorer's tray" ((Read-State $run).appIcon -and $mine.placement -eq "Tray" -and (Explorer-Has-Ours)) "placement $($mine.placement)"
+
+    Write-Settings '{ "icons": { "rules": [ { "match": "TestTrayApp.exe:103", "placement": "Overflow" }, { "match": "TestTrayApp.exe:104", "placement": "Hidden" }, { "match": "TestTrayApp.exe:102", "tooltip": "Renamed: {tip}" } ] } }'
+    Check "rules: SmokeC in the hidden icons behind a chevron, SmokeD hidden, SmokeB's tooltip replaced" (Wait-Until {
+        $s = Read-State $run
+        (Smoke "SmokeC").placement -eq "Overflow" -and (Smoke "SmokeD").placement -eq "Hidden" -and (Smoke "SmokeB").shownTip -eq "Renamed: SmokeB tip #1" -and
+            $s.chevron -and $s.overflow.count -ge 1 } 5000)
+    Post "SmokeD" 1
+    Check "a hidden icon keeps registering: its tooltip change reaches our host and Explorer's tray" ((Wait-Until { (Smoke "SmokeD").tip -eq "SmokeD tip #2" } 5000) -and
+        (Wait-Until { (Explorer-Tip "SmokeD") -eq "SmokeD tip #2" } 5000))
+
+    $a = Smoke "SmokeA"
+    Tool explorer-hide $a.hwnd 101 on | Out-Null
+    Check "an icon Windows hides (Explorer hides it; the app did not) is hidden here too" (Wait-Until { $i = Smoke "SmokeA"; $i.explorer -eq "Hidden" -and $i.placement -eq "Hidden" } 8000) "$((Smoke 'SmokeA').explorer), $((Smoke 'SmokeA').placement)"
+    Tool explorer-hide $a.hwnd 101 off | Out-Null
+    Check "and it comes back when Windows shows it again" (Wait-Until { (Smoke "SmokeA").placement -eq "Tray" } 8000)
+
+    Write-Settings '{ "icons": { "default": "Overflow", "rules": [ { "match": "TestTrayApp.exe:101", "placement": "Tray" } ] } }'
+    Check "icons without a rule in the hidden icons: only the icon a rule puts in the tray stays" (Wait-Until { (Tray-Count) -eq 1 -and (Smoke "SmokeA").placement -eq "Tray" } 5000) "tray: $(Tray-Count)"
+    Write-Settings '{ "icons": { "maxTrayIcons": 2, "order": [ "TestTrayApp.exe:104", "TestTrayApp.exe:102" ] } }'
+    Check "the saved order comes first, and a full tray spills into the hidden icons" (Wait-Until {
+        (Tray-Count) -eq 2 -and (Smoke "SmokeD").index -eq 0 -and (Smoke "SmokeB").index -eq 1 -and (Smoke "SmokeA").placement -eq "Overflow" } 5000) "tray: $(Tray-Count)"
+
+    Write-Settings '{ "icons": { "rules": [ { "match": "TestTrayApp.exe:103", "placement": "Overflow" } ] } }'
+    [void](Wait-Until { (Smoke "SmokeC").placement -eq "Overflow" -and (Smoke "SmokeA").placement -eq "Tray" -and (Read-State $run).chevron } 5000)
+    if (-not $SkipMouse) {
+        Idle
+        $c = Center (Read-State $run).chevron
+        Tool click $c[0] $c[1] | Out-Null
+        Check "the chevron opens the hidden-icons flyout" (Wait-Until { (Read-State $run).overflow.open -and (Smoke "SmokeC").rect } 3000)
+        $ci = Smoke "SmokeC"
+        $cRect = "[$($ci.rect[0]),$($ci.rect[1]),$([int]$ci.rect[0] + [int]$ci.rect[2]),$([int]$ci.rect[1] + [int]$ci.rect[3])]"
+        Idle
+        Check "a click on an icon in the flyout reaches its app, which is told the icon's rectangle there" ((Click-Icon $run "SmokeC" "left") -and
+            (Wait-Until { Log-Has "SmokeC" ("NIN_SELECT .*iconRect=" + [regex]::Escape($cRect)) } 3000)) "expected iconRect=$cRect"
+        Idle
+        $w = (Read-State $run).window
+        Tool click-target ([int]$w[0] - 400) ([int]$w[1] - 300) | Out-Null
+        Check "a click elsewhere closes the flyout" (Wait-Until { -not (Read-State $run).overflow.open } 3000)
+
+        # SmokeB onto the first other icon in the tray: it takes that icon's place.
+        $target = (Read-State $run).icons | Where-Object { $_.placement -eq "Tray" -and $_.tip -notlike "SmokeB*" } | Sort-Object index | Select-Object -First 1
+        $selects = @(Select-String -Path (Join-Path $OutDir "testtray-SmokeB.log") -Pattern "NIN_SELECT").Count
+        $from = Center (Smoke "SmokeB").rect; $to = Center $target.rect
+        Idle
+        Tool drag $from[0] $from[1] $to[0] $to[1] | Out-Null
+        Check "dragging an icon onto another moves it to that place and saves the order; its app hears no click" ((Wait-Until { (Smoke "SmokeB").index -eq $target.index } 3000) -and
+            (Saved-Icons).order -contains "TestTrayApp.exe:102" -and @(Select-String -Path (Join-Path $OutDir "testtray-SmokeB.log") -Pattern "NIN_SELECT").Count -eq $selects) "SmokeB at $((Smoke 'SmokeB').index), expected $($target.index)"
+
+        $from = Center (Smoke "SmokeA").rect; $to = Center (Read-State $run).chevron
+        Idle
+        Tool drag $from[0] $from[1] $to[0] $to[1] | Out-Null
+        Check "dragging an icon onto the chevron puts it in the hidden icons, as a rule" ((Wait-Until { (Smoke "SmokeA").placement -eq "Overflow" } 3000) -and
+            @((Saved-Icons).rules | Where-Object { $_.match -eq "TestTrayApp.exe:101" -and $_.placement -eq "Overflow" }).Count -eq 1)
+
+        $d = Center (Smoke "SmokeD").rect
+        $heard = @(Select-String -Path (Join-Path $OutDir "testtray-SmokeD.log") -Pattern "MENU OPEN|WM_RBUTTON").Count
+        Idle
+        Tool click $d[0] $d[1] right shift | Out-Null
+        Check "Shift+right-click opens the tray's menu for the icon, and its app hears nothing of it" ((Wait-Until {
+            Select-String -Path (Join-Path $run "FreeSystemTray.log") -Pattern "Icon menu opened for SmokeD" -Quiet } 3000) -and
+            @(Select-String -Path (Join-Path $OutDir "testtray-SmokeD.log") -Pattern "MENU OPEN|WM_RBUTTON").Count -eq $heard)
+        Idle
+        Tool key esc | Out-Null
+    }
+    Write-Settings '{ }'
+    [void](Wait-Until { Test-Icons { param($i) $i.placement -eq "Tray" } } 5000)
+
+    Send-Command $run "--open-settings"
+    Check "--open-settings opens the settings window" (Wait-Until { (Read-State $run).settingsWindow -eq "FreeSystemTray settings" } 5000)
+    $p = Start-Process -FilePath $app -ArgumentList "--log-dir `"$run\second`"" -PassThru -Wait
+    Check "starting the exe again hands over to the running one (its settings) and exits" ($p.ExitCode -eq 0 -and
+        (Select-String -Path (Join-Path $run "second\FreeSystemTray.log") -Pattern "showing its settings" -Quiet))
+
     # --- Graceful exit ----------------------------------------------------------------------
     Post "SmokeC" 1
     [void](Wait-Until { (Our-Icon $run "SmokeC").tip -eq "SmokeC tip #1" } 3000)
@@ -421,11 +510,13 @@ try {
     Check "after exit, Explorer has every test icon with its latest tooltip" (Wait-Until {
         (Explorer-Tip "SmokeA") -eq "SmokeA tip #1" -and (Explorer-Tip "SmokeB") -eq "SmokeB tip #1" -and (Explorer-Tip "SmokeC") -eq "SmokeC tip #1" } 5000)
     Check "the watchdog saw a clean exit" (Wait-Until { Select-String -Path (Join-Path $run "watchdog.log") -Pattern "exited cleanly" -Quiet } 5000)
+    Check "after exit, FreeSystemTray's own icon is gone from Explorer's tray" (-not (Explorer-Has-Ours))
 
     # --- Crash --------------------------------------------------------------------------------
     $crash = Join-Path $OutDir "crash"
     $proc = Start-App $crash
     Check "takes the role again" (Host-Is "FreeSystemTray")
+    Check "and its own icon is back in Explorer's tray" (Wait-Until { Explorer-Has-Ours } 5000)
     Post "SmokeC" 1
     [void](Wait-Until { (Our-Icon $crash "SmokeC").tip -eq "SmokeC tip #2" } 3000)
     Stop-Process -Id $proc.Id -Force
@@ -433,6 +524,7 @@ try {
     Check "after a crash, the watchdog hands the tray back" (Wait-Until { Select-String -Path (Join-Path $crash "watchdog.log") -Pattern "Hand-back:" -Quiet } 5000)
     Check "after a crash, Explorer has the latest tooltip" (Wait-Until { (Explorer-Tip "SmokeC") -eq "SmokeC tip #2" } 5000) "Explorer: $(Explorer-Tip 'SmokeC')"
     Check "after a crash, Explorer's taskbar is always-on-top" (Explorer-Topmost)
+    Check "after a crash, the watchdog removes FreeSystemTray's own (dead) icon from Explorer's tray" (Wait-Until { -not (Explorer-Has-Ours) } 5000)
 }
 finally {
     if (Get-Process FreeSystemTray -ErrorAction SilentlyContinue) { [void](Stop-App (Join-Path $OutDir "cleanup")) }

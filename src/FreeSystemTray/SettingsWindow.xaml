@@ -1,0 +1,243 @@
+<Window x:Class="FreeSystemTray.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="FreeSystemTray settings"
+        Icon="FreeSystemTray.ico"
+        Width="760" Height="620" MinWidth="600" MinHeight="480"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResizeWithGrip">
+    <!-- An ordinary window in Windows' own look. Every change applies at once and is saved to
+         settings.json; edits to that file while the window is open show up here too. Text boxes
+         apply when Enter is pressed or they lose the focus. -->
+    <Window.Resources>
+        <Style TargetType="TextBlock" x:Key="Hint">
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style TargetType="TextBlock" x:Key="Label">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Margin" Value="0,4" />
+        </Style>
+        <Style TargetType="GroupBox">
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+    </Window.Resources>
+    <DockPanel Margin="12">
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0" LastChildFill="True">
+            <Button DockPanel.Dock="Right" Content="Close" MinWidth="80" Padding="10,3" IsCancel="True" Click="Close_Click" />
+            <TextBlock x:Name="StatusText" Style="{StaticResource Hint}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center" Margin="0,0,12,0" />
+        </DockPanel>
+        <TabControl x:Name="Tabs">
+
+            <TabItem Header="Icons" x:Name="IconsTab">
+                <DockPanel Margin="10">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,8"
+                                   Text="Where each icon is shown. You can also drag icons in the tray to a new place, onto its chevron (the hidden icons) and back, or Shift+right-click one." />
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource Label}" Text="Icons without a rule:" />
+                            <ComboBox x:Name="DefaultPlacementBox" Grid.Column="1" HorizontalAlignment="Left" MinWidth="280" SelectionChanged="DefaultPlacementBox_SelectionChanged">
+                                <ComboBoxItem Tag="Tray" Content="In the tray" />
+                                <ComboBoxItem Tag="Overflow" Content="In the hidden icons" />
+                                <ComboBoxItem Tag="Windows" Content="Where Windows shows them (taskbar or hidden)" />
+                            </ComboBox>
+                        </Grid>
+                        <CheckBox x:Name="HideWindowsHiddenBox" Content="Hide icons that Windows hides, such as Meet Now while it is turned off" Click="HideWindowsHiddenBox_Click" />
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                            <TextBlock Style="{StaticResource Label}" Text="At most" />
+                            <TextBox x:Name="MaxIconsBox" Width="44" LostKeyboardFocus="MaxIconsBox_Commit" KeyDown="TextBox_EnterCommits" />
+                            <TextBlock Style="{StaticResource Label}" Margin="8,0,0,0" Text="icons in the tray; the others go to the hidden icons (0: no limit)" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <GroupBox DockPanel.Dock="Bottom" Header="Selected icon" x:Name="DetailsBox" Margin="0,8,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Style="{StaticResource Label}" Text="Name:" />
+                            <TextBox x:Name="LabelBox" Grid.Column="1" Margin="0,2" LostKeyboardFocus="LabelBox_Commit" KeyDown="TextBox_EnterCommits"
+                                     ToolTip="The icon's name here and in menus. Empty: the first line of its tooltip." />
+                            <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Tooltip:" />
+                            <TextBox x:Name="TooltipBox" Grid.Row="1" Grid.Column="1" Margin="0,2" LostKeyboardFocus="TooltipBox_Commit" KeyDown="TextBox_EnterCommits"
+                                     ToolTip="Replaces the app's tooltip; {tip} stands for the app's own. Empty: the app's tooltip." />
+                            <CheckBox x:Name="NoTooltipBox" Grid.Row="1" Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center" Content="None" Click="NoTooltipBox_Click"
+                                      ToolTip="Show no tooltip for this icon" />
+                            <TextBlock x:Name="IdentityText" Grid.Row="2" Grid.ColumnSpan="3" Style="{StaticResource Hint}" Margin="0,4,0,0" />
+                            <StackPanel Grid.Row="3" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button x:Name="MoveUpButton" Content="Move _up" MinWidth="80" Padding="8,2" Click="MoveUp_Click" />
+                                <Button x:Name="MoveDownButton" Content="Move _down" MinWidth="80" Padding="8,2" Margin="6,0,0,0" Click="MoveDown_Click" />
+                                <Button x:Name="ForgetButton" Content="_Forget its settings" Padding="8,2" Margin="18,0,0,0" Click="Forget_Click"
+                                        ToolTip="Removes the rule for this icon and its saved place" />
+                            </StackPanel>
+                        </Grid>
+                    </GroupBox>
+
+                    <ListView x:Name="IconListView" SelectionMode="Single" SelectionChanged="IconListView_SelectionChanged">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Width="34">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <!-- Dark, as in the tray: some icons are white. -->
+                                            <Border Width="22" Height="22" CornerRadius="3" Background="#2B2B2B">
+                                                <Image Source="{Binding Image}" Width="16" Height="16" Opacity="{Binding ImageOpacity}"
+                                                       RenderOptions.BitmapScalingMode="HighQuality" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="Icon" Width="200" DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="App" Width="150" DisplayMemberBinding="{Binding App}" />
+                                <GridViewColumn Header="Rule" Width="150">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Choice, Mode=TwoWay}"
+                                                      DisplayMemberPath="Text" MinWidth="130" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="Now" Width="150" DisplayMemberBinding="{Binding Status}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </DockPanel>
+            </TabItem>
+
+            <TabItem Header="Appearance">
+                <StackPanel Margin="10">
+                    <GroupBox Header="Theme">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <ComboBox x:Name="ThemeBox" MinWidth="220" DisplayMemberPath="Name" SelectionChanged="ThemeBox_SelectionChanged" />
+                                <Button Content="Open the _themes folder" Padding="8,2" Margin="8,0,0,0" Click="OpenThemes_Click" />
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                       Text="Your own themes go in the themes folder; edits to them apply at once. README.md, &quot;Themes&quot;, describes the files." />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="Size">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Style="{StaticResource Label}" Text="Icon size:" />
+                            <ComboBox x:Name="IconSizeBox" Grid.Column="1" Width="110" Margin="0,2" IsEditable="True"
+                                      LostKeyboardFocus="SizeBox_Commit" KeyDown="TextBox_EnterCommits" SelectionChanged="SizeBox_SelectionChanged" />
+                            <TextBlock Grid.Column="2" Style="{StaticResource Hint}" Margin="8,0,0,0" VerticalAlignment="Center" Text="A percentage of 16 px (&quot;150%&quot;) or pixels (&quot;24px&quot;)" />
+                            <TextBlock Grid.Row="1" Style="{StaticResource Label}" Text="Tray size:" />
+                            <ComboBox x:Name="TraySizeBox" Grid.Row="1" Grid.Column="1" Width="110" Margin="0,2" IsEditable="True"
+                                      LostKeyboardFocus="SizeBox_Commit" KeyDown="TextBox_EnterCommits" SelectionChanged="SizeBox_SelectionChanged" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Hint}" Margin="8,0,0,0" VerticalAlignment="Center" Text="Everything around the icons: a percentage, or each icon's cell in pixels" />
+                            <CheckBox x:Name="SnapToPixelsBox" Grid.Row="2" Grid.ColumnSpan="3" Content="Round sizes to whole screen pixels (sharper)" Click="SnapToPixelsBox_Click" />
+                            <StackPanel Grid.Row="3" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="0,2">
+                                <TextBlock Style="{StaticResource Label}" Text="Scaling icons:" />
+                                <ComboBox x:Name="IconScalingBox" MinWidth="200" SelectionChanged="IconScalingBox_SelectionChanged">
+                                    <ComboBoxItem Tag="Smooth" Content="Smooth" />
+                                    <ComboBoxItem Tag="NearestNeighbor" Content="Blocky (nearest neighbour)" />
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+                    </GroupBox>
+                    <TextBlock x:Name="AppearanceProblem" Style="{StaticResource Hint}" Foreground="Firebrick" />
+                </StackPanel>
+            </TabItem>
+
+            <TabItem Header="Show and hide">
+                <StackPanel Margin="10">
+                    <GroupBox Header="Hotkey">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBox x:Name="HotkeyBox" Width="220" IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                                         PreviewKeyDown="HotkeyBox_PreviewKeyDown" ToolTip="Click here and press the keys" />
+                                <Button Content="_No hotkey" Padding="8,2" Margin="8,0,0,0" Click="ClearHotkey_Click" />
+                            </StackPanel>
+                            <TextBlock x:Name="HotkeyStatus" Style="{StaticResource Hint}" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="Auto-hide">
+                        <StackPanel>
+                            <CheckBox x:Name="AutoHideBox" Content="_Hide the tray until the hotkey or the hotspot shows it" Click="AutoHideBox_Click" />
+                            <CheckBox x:Name="HideOnClickAwayBox" Content="Hide it again on a click elsewhere or a switch to another window" Margin="20,4,0,4" Click="HideOnClickAwayBox_Click" />
+                            <StackPanel Orientation="Horizontal" Margin="20,2,0,2">
+                                <TextBlock Style="{StaticResource Label}" Text="Hide it when the pointer has been away for" />
+                                <TextBox x:Name="HideDelayBox" Width="60" LostKeyboardFocus="HideDelayBox_Commit" KeyDown="TextBox_EnterCommits" />
+                                <TextBlock Style="{StaticResource Label}" Margin="6,0,0,0" Text="ms (0: never)" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,2">
+                                <TextBlock Style="{StaticResource Label}" Text="Hotspot:" />
+                                <ComboBox x:Name="HotspotBox" MinWidth="160" SelectionChanged="HotspotBox_SelectionChanged" />
+                                <TextBlock Style="{StaticResource Label}" Margin="12,0,8,0" Text="after" />
+                                <TextBox x:Name="HotspotDelayBox" Width="60" LostKeyboardFocus="HotspotDelayBox_Commit" KeyDown="TextBox_EnterCommits" />
+                                <TextBlock Style="{StaticResource Label}" Margin="6,0,0,0" Text="ms" />
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource Hint}" Text="An edge or a corner of the tray's monitor: resting the pointer there shows the tray." />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="Animation">
+                        <StackPanel Orientation="Horizontal">
+                            <ComboBox x:Name="AnimationBox" MinWidth="120" SelectionChanged="AnimationBox_SelectionChanged" />
+                            <TextBlock Style="{StaticResource Label}" Margin="12,0,8,0" Text="taking" />
+                            <TextBox x:Name="AnimationMsBox" Width="60" LostKeyboardFocus="AnimationMsBox_Commit" KeyDown="TextBox_EnterCommits" />
+                            <TextBlock Style="{StaticResource Label}" Margin="6,0,0,0" Text="ms (off while &quot;Show animations in Windows&quot; is off)" />
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </TabItem>
+
+            <TabItem Header="General">
+                <StackPanel Margin="10">
+                    <GroupBox Header="Starting">
+                        <StackPanel>
+                            <CheckBox x:Name="AutostartBox" Content="_Start FreeSystemTray when I sign in to Windows" Click="AutostartBox_Click" />
+                            <TextBlock x:Name="AutostartStatus" Style="{StaticResource Hint}" Margin="20,0,0,0" />
+                            <CheckBox x:Name="AppIconBox" Content="Show FreeSystemTray's own _icon (its menu and these settings)" Click="AppIconBox_Click" />
+                            <TextBlock Style="{StaticResource Hint}" Margin="20,0,0,0" Text="It also shows in Explorer's tray, so the settings can be reached while the tray is hidden. Right-clicking the tray's grip always opens its menu." />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="Position">
+                        <StackPanel>
+                            <CheckBox x:Name="LockBox" Content="_Lock the tray's position" Click="LockBox_Click" />
+                            <CheckBox x:Name="SnapBox" Content="S_nap to screen edges while dragging" Click="SnapBox_Click" />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="Files">
+                        <StackPanel>
+                            <TextBlock x:Name="FilesText" Style="{StaticResource Hint}" Margin="0,0,0,6" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Open the settings _file" Padding="8,2" Click="OpenSettingsFile_Click" />
+                                <Button Content="Open the _log folder" Padding="8,2" Margin="8,0,0,0" Click="OpenLogFolder_Click" />
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+                    <TextBlock x:Name="VersionText" Style="{StaticResource Hint}" />
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

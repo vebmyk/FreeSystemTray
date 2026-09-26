@@ -10,6 +10,8 @@
     <RootNamespace>FreeSystemTray</RootNamespace>
     <StartupObject>FreeSystemTray.Program</StartupObject>
     <Version>0.1.0</Version>
+    <!-- Drawn by tools/Make-AppIcon.ps1. -->
+    <ApplicationIcon>FreeSystemTray.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +25,11 @@
          (XamlReader), not compiled into the app. -->
     <Page Remove="Themes\**" />
     <Content Include="Themes\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The settings window's icon. -->
+    <Resource Include="FreeSystemTray.ico" />
   </ItemGroup>
 
   <ItemGroup>

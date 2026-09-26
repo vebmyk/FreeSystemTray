@@ -61,6 +61,34 @@ namespace FreeSystemTray.ShowHide
             return new HotkeyGesture(modifiers, vk, name);
         }
 
+        /// <summary>
+        /// How a pressed key chord is written ("Ctrl+Alt+T"), for <see cref="Parse"/>. Null while only
+        /// modifiers are down.
+        /// </summary>
+        public static string? Format(ModifierKeys modifiers, Key key)
+        {
+            if (key is Key.None or Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift
+                or Key.RightShift or Key.LWin or Key.RWin or Key.System) return null;
+            var parts = new List<string>(5);
+            if (modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
+            if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
+            if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
+            if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
+            parts.Add(key is >= Key.D0 and <= Key.D9 ? ((char)('0' + (key - Key.D0))).ToString()
+                : PreferredNames.TryGetValue(key, out string? name) ? name : key.ToString());
+            return string.Join("+", parts);
+        }
+
+        /// <summary>Readable names for keys that have several (ToString would give Oem3 for OemTilde, Next for PageDown).</summary>
+        private static readonly Dictionary<Key, string> PreferredNames = new()
+        {
+            [Key.Enter] = nameof(Key.Enter), [Key.PageUp] = nameof(Key.PageUp), [Key.PageDown] = nameof(Key.PageDown),
+            [Key.CapsLock] = nameof(Key.CapsLock), [Key.PrintScreen] = nameof(Key.PrintScreen),
+            [Key.OemSemicolon] = nameof(Key.OemSemicolon), [Key.OemQuestion] = nameof(Key.OemQuestion), [Key.OemTilde] = nameof(Key.OemTilde),
+            [Key.OemOpenBrackets] = nameof(Key.OemOpenBrackets), [Key.OemPipe] = nameof(Key.OemPipe),
+            [Key.OemCloseBrackets] = nameof(Key.OemCloseBrackets), [Key.OemQuotes] = nameof(Key.OemQuotes), [Key.OemBackslash] = nameof(Key.OemBackslash)
+        };
+
         public override string ToString()
         {
             var parts = new List<string>(5);

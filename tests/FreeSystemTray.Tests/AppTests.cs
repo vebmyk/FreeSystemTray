@@ -199,10 +199,18 @@ namespace FreeSystemTray.Tests
         [InlineData("--toggle", ShowHideCommand.Toggle)]
         [InlineData("--show", ShowHideCommand.Show)]
         [InlineData("--hide", ShowHideCommand.Hide)]
+        [InlineData("--open-settings", ShowHideCommand.Settings)]
         public void Show_and_hide_commands_are_read(string arg, ShowHideCommand expected)
         {
             Assert.Equal(expected, CommandLine.Parse(new[] { arg }).ShowHideCommand);
             Assert.Null(CommandLine.Parse(Array.Empty<string>()).ShowHideCommand);
+        }
+
+        [Fact]
+        public void Autostart_is_read()
+        {
+            Assert.True(CommandLine.Parse(new[] { "--autostart" }).Autostart);
+            Assert.False(CommandLine.Parse(Array.Empty<string>()).Autostart);
         }
 
         [Fact]

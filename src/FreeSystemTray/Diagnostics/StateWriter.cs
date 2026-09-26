@@ -27,10 +27,15 @@ namespace FreeSystemTray.Diagnostics
         private readonly List<string> _balloons = new();
         private string? _last;
 
-        public StateWriter(ManagedShellTrayHost host, TrayWindow window, string dir)
+        private readonly Func<bool> _appIconShown;
+        private readonly Func<SettingsWindow?> _settingsWindow;
+
+        public StateWriter(ManagedShellTrayHost host, TrayWindow window, string dir, Func<bool> appIconShown, Func<SettingsWindow?> settingsWindow)
         {
             _host = host;
             _window = window;
+            _appIconShown = appIconShown;
+            _settingsWindow = settingsWindow;
             Directory.CreateDirectory(dir);
             _path = Path.Combine(dir, "state.json");
             _host.BalloonReceived += Host_BalloonReceived;
@@ -87,6 +92,8 @@ namespace FreeSystemTray.Diagnostics
                     ["rect"] = overflow.IsEmpty ? null : Rect(overflow),
                     ["count"] = _window.Icons.Overflow.Count
                 },
+                ["appIcon"] = _appIconShown(),
+                ["settingsWindow"] = _settingsWindow() is { IsVisible: true } settings ? settings.Title : null,
                 ["shell"] = Shell(),
                 ["iconCount"] = _host.Icons.Count,
                 ["icons"] = _host.Icons.Select(Describe).ToList(),

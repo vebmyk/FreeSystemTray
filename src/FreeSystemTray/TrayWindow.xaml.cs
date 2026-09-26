@@ -46,7 +46,6 @@ namespace FreeSystemTray
         private PixelRect _reportedBounds;
         private ScreenEdge _reportedEdge = ScreenEdge.Bottom;
         private IntPtr _behind;
-        private bool _gripMenuOpen;
         private bool _dragging;
         private PixelPoint _dragStartCursor;
         private PixelRect _dragStartBounds;
@@ -111,6 +110,11 @@ namespace FreeSystemTray
         /// <summary>The icons, arranged by the icon settings.</summary>
         internal IconModel Icons => _model;
 
+        internal ThemeStore Themes => _themes;
+
+        /// <summary>The settings file in use.</summary>
+        internal string SettingsPath => _store.FilePath;
+
         /// <summary>The hidden-icons flyout.</summary>
         internal OverflowWindow Overflow => _overflow;
 
@@ -123,7 +127,7 @@ namespace FreeSystemTray
         internal UIElement AnimatedContent => ContentHost;
 
         /// <summary>The window or an icon is being dragged, or a menu of the tray or its flyout is open: auto-hide waits.</summary>
-        public bool IsBusy => _dragging || _gripMenuOpen || _iconMenuOpen || _iconDrag != null || _overflow.IsOpen;
+        public bool IsBusy => _dragging || _appMenuOpen || _iconMenuOpen || _iconDrag != null || _overflow.IsOpen;
 
         /// <summary>Lays the window out and places it before it is shown again: it may have changed size while hidden.</summary>
         internal void PrepareToShow()
@@ -170,7 +174,7 @@ namespace FreeSystemTray
         /// <summary>Reports the window's and icons' positions to the host again (after the show animation moved them).</summary>
         internal void RefreshBounds() => QueueBoundsReport();
 
-        /// <summary>Applies settings read from the settings file after it was edited.</summary>
+        /// <summary>Applies settings: read from the settings file after it was edited, or changed in the app.</summary>
         internal void ApplySettings(AppSettings settings)
         {
             _settings = settings;
@@ -179,6 +183,7 @@ namespace FreeSystemTray
             ShowHide?.ApplySettings(settings.ShowHide);
             _model.ApplySettings(settings.Icons);
             LoadTheme();
+            SettingsApplied?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>The sizes in use, from the scaling settings and the theme.</summary>
@@ -615,78 +620,115 @@ namespace FreeSystemTray
 
         #region Menu
 
-        private void GripMenu_Opened(object sender, RoutedEventArgs e)
+        /// <summary>Opens the settings window, at an icon (its key) or at the start. Set by the app.</summary>
+        internal Action<string?>? OpenSettings { get; set; }
+
+        /// <summary>The app's menu is open (from the grip or the app's own icon): auto-hide waits.</summary>
+        private bool _appMenuOpen;
+
+        private void Grip_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
         {
-            _gripMenuOpen = true;
-            LockMenuItem.IsChecked = _settings.LockPosition;
-            SnapMenuItem.IsChecked = _settings.SnapToEdges;
-            AutoHideMenuItem.IsChecked = _settings.ShowHide.AutoHide;
-            // Hiding needs a way back: the hotkey or the hotspot.
-            HideMenuItem.IsEnabled = ShowHide?.CanShowAgain == true;
-            HideMenuItem.InputGestureText = ShowHide?.Hotkey?.ToString() ?? "";
-            HideMenuItem.ToolTip = ShowHide?.CanShowAgain == true ? null
-                : "Set a hotkey or a hotspot in the settings file to be able to hide the tray." +
-                  (ShowHide?.HotkeyProblem is string problem ? " Hotkey: " + problem : "");
-            ToolTipService.SetShowOnDisabled(HideMenuItem, true);
-            FillThemeMenu();
-            // The window never activates by itself (WS_EX_NOACTIVATE), so without this the menu gets
-            // no keyboard input (Esc, arrows). Explorer's taskbar menus take the foreground the same way.
-            NativeMethods.SetForegroundWindow(_hwnd);
-            ((ContextMenu)sender).Focus();
+            e.Handled = true;
+            ShowAppMenu(Grip);
         }
 
-        private void LockMenuItem_Click(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// The app's menu at the pointer: from the grip, or from FreeSystemTray's own icon (then
+        /// <paramref name="target"/> is null, and the tray may be hidden).
+        /// </summary>
+        internal void ShowAppMenu(UIElement? target)
         {
-            _settings.LockPosition = LockMenuItem.IsChecked;
-            SaveSettings();
-            UpdateGrip();
+            var menu = new ContextMenu { PlacementTarget = target, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+            var settings = new MenuItem { Header = "_Settings…", FontWeight = FontWeights.SemiBold };
+            settings.Click += (_, _) => OpenSettings?.Invoke(null);
+            menu.Items.Add(settings);
+            menu.Items.Add(ThemeMenu());
+            menu.Items.Add(new Separator());
+            AddCheck(menu, "_Lock position", _settings.LockPosition, on => UpdateSettings(s => s.LockPosition = on));
+            AddCheck(menu, "S_nap to screen edges", _settings.SnapToEdges, on => UpdateSettings(s => s.SnapToEdges = on));
+            menu.Items.Add(new Separator());
+            AddCheck(menu, "_Auto-hide", _settings.ShowHide.AutoHide, on => UpdateSettings(s => s.ShowHide.AutoHide = on));
+            if (ShowHide is { IsShown: false } showHide)
+            {
+                var show = new MenuItem { Header = "Sh_ow the tray", InputGestureText = showHide.Hotkey?.ToString() ?? "" };
+                show.Click += (_, _) => showHide.Show(ShowCause.Menu);
+                menu.Items.Add(show);
+            }
+            else
+            {
+                // Hiding needs a way back: the hotkey or the hotspot.
+                bool canHide = ShowHide?.CanShowAgain == true;
+                var hide = new MenuItem
+                {
+                    Header = "_Hide",
+                    InputGestureText = ShowHide?.Hotkey?.ToString() ?? "",
+                    IsEnabled = canHide,
+                    ToolTip = canHide ? null : "Set a hotkey or a hotspot in the settings to be able to hide the tray." +
+                                               (ShowHide?.HotkeyProblem is string problem ? " Hotkey: " + problem : "")
+                };
+                ToolTipService.SetShowOnDisabled(hide, true);
+                hide.Click += (_, _) => ShowHide?.Hide("menu");
+                menu.Items.Add(hide);
+            }
+            menu.Items.Add(new Separator());
+            var exit = new MenuItem { Header = "E_xit FreeSystemTray" };
+            exit.Click += (_, _) => Close();
+            menu.Items.Add(exit);
+
+            menu.Opened += (_, _) =>
+            {
+                _appMenuOpen = true;
+                // The tray never activates by itself (WS_EX_NOACTIVATE), so without this the menu gets
+                // no keyboard input (Esc, arrows). Explorer's taskbar menus take the foreground the same way.
+                IntPtr popup = PresentationSource.FromVisual(menu) is HwndSource source ? source.Handle : IntPtr.Zero;
+                NativeMethods.SetForegroundWindow(popup != IntPtr.Zero ? popup : _hwnd);
+                menu.Focus();
+            };
+            menu.Closed += (_, _) => _appMenuOpen = false;
+            menu.IsOpen = true;
         }
 
-        private void GripMenu_Closed(object sender, RoutedEventArgs e) => _gripMenuOpen = false;
-
-        private void SnapMenuItem_Click(object sender, RoutedEventArgs e)
+        private static void AddCheck(ContextMenu menu, string header, bool isChecked, Action<bool> changed)
         {
-            _settings.SnapToEdges = SnapMenuItem.IsChecked;
-            SaveSettings();
+            var item = new MenuItem { Header = header, IsCheckable = true, IsChecked = isChecked };
+            item.Click += (_, _) => changed(item.IsChecked);
+            menu.Items.Add(item);
         }
-
-        private void AutoHideMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            _settings.ShowHide.AutoHide = AutoHideMenuItem.IsChecked;
-            SaveSettings();
-            ShowHide?.ApplySettings(_settings.ShowHide);
-        }
-
-        private void HideMenuItem_Click(object sender, RoutedEventArgs e) => ShowHide?.Hide("menu");
 
         /// <summary>One item per theme file; choosing one switches to it at once and saves it.</summary>
-        private void FillThemeMenu()
+        private MenuItem ThemeMenu()
         {
-            ThemeMenuItem.Items.Clear();
+            var menu = new MenuItem { Header = "_Theme" };
             foreach (ThemeInfo info in _themes.List())
             {
                 var item = new MenuItem
                 {
-                    Header = info.Name.Replace("_", "__"), // an underscore would be an access key
+                    Header = MenuText(info.Name),
                     IsCheckable = true,
                     IsChecked = string.Equals(info.Id, _theme.Id, StringComparison.OrdinalIgnoreCase),
                     ToolTip = info.Path
                 };
                 string id = info.Id;
-                item.Click += (_, _) => SelectTheme(id);
-                ThemeMenuItem.Items.Add(item);
+                item.Click += (_, _) => UpdateSettings(s => s.Theme = id);
+                menu.Items.Add(item);
             }
-            ThemeMenuItem.IsEnabled = ThemeMenuItem.Items.Count > 0;
+            menu.IsEnabled = menu.Items.Count > 0;
+            return menu;
         }
 
-        private void SelectTheme(string id)
+        /// <summary>Raised after settings were applied: changed here, in the settings window, or in the file.</summary>
+        internal event EventHandler? SettingsApplied;
+
+        /// <summary>The settings in use. Change them with <see cref="UpdateSettings"/>.</summary>
+        internal AppSettings Settings => _settings;
+
+        /// <summary>Changes the settings, saves them and applies them.</summary>
+        internal void UpdateSettings(Action<AppSettings> change)
         {
-            _settings.Theme = id;
+            change(_settings);
             SaveSettings();
-            LoadTheme();
+            ApplySettings(_settings);
         }
-
-        private void ExitMenuItem_Click(object sender, RoutedEventArgs e) => Close();
 
         private void UpdateGrip()
         {
@@ -737,9 +779,7 @@ namespace FreeSystemTray
             _iconDrag = null;
             if (changed != null)
             {
-                _settings.Icons = changed;
-                SaveSettings();
-                _model.ApplySettings(changed);
+                UpdateSettings(s => s.Icons = changed);
                 IList<IconItem> group = drag.Item.Placement == IconPlacement.Tray ? _model.Tray : _model.Overflow;
                 AppLog.Write($"Icon {drag.Item} dropped: {(drag.Item.Placement == IconPlacement.Tray ? "tray" : "hidden icons")}, place {group.IndexOf(drag.Item) + 1} of {group.Count}");
             }
@@ -792,6 +832,10 @@ namespace FreeSystemTray
             AddPlacementItem(menu, item, IconPlacement.Tray, "Always in the _tray", current == IconPlacement.Tray);
             AddPlacementItem(menu, item, IconPlacement.Overflow, "In the hidden _icons", current == IconPlacement.Overflow);
             AddPlacementItem(menu, item, IconPlacement.Hidden, "_Hide", current == IconPlacement.Hidden);
+            menu.Items.Add(new Separator());
+            var rename = new MenuItem { Header = "_Name and tooltip…" };
+            rename.Click += (_, _) => OpenSettings?.Invoke(item.Key);
+            menu.Items.Add(rename);
             menu.Opened += (_, _) =>
             {
                 _iconMenuOpen = true;
@@ -800,6 +844,7 @@ namespace FreeSystemTray
             };
             menu.Closed += (_, _) => _iconMenuOpen = false;
             menu.IsOpen = true;
+            AppLog.Write($"Icon menu opened for {item}");
         }
 
         private void AddPlacementItem(ContextMenu menu, IconItem item, IconPlacement? placement, string header, bool isChecked)
@@ -811,9 +856,7 @@ namespace FreeSystemTray
 
         private void SetIconPlacement(IconItem item, IconPlacement? placement)
         {
-            _settings.Icons.EditRule(item.Key, r => r.Placement = placement);
-            SaveSettings();
-            _model.ApplySettings(_settings.Icons);
+            UpdateSettings(s => s.Icons.EditRule(item.Key, r => r.Placement = placement));
             AppLog.Write($"Icon {item}: {(placement == null ? "placed automatically" : Describe(placement.Value))}");
         }
 

@@ -15,6 +15,10 @@ namespace FreeSystemTray
     ///                     test into DIR; implies --log-dir DIR and --verbose
     ///   --exit            close the running instance and wait for it to exit
     ///   --toggle, --show, --hide   show or hide the running instance's window
+    ///   --open-settings   show the running instance's tray and its settings window (what starting the
+    ///                     exe again does too)
+    ///   --autostart       started at sign-in: wait for Explorer's taskbar; if an instance is running
+    ///                     already, exit quietly
     ///   --import-theme FILE   copy a theme file into the themes folder and switch to it
     ///   --export-theme FILE   write the current theme, every value spelled out, to FILE
     ///   --no-watchdog     do not start the watchdog process
@@ -33,6 +37,9 @@ namespace FreeSystemTray
 
         /// <summary>--toggle, --show or --hide: sent to the running instance.</summary>
         public ShowHideCommand? ShowHideCommand { get; private set; }
+
+        /// <summary>Started from the Run key at sign-in.</summary>
+        public bool Autostart { get; private set; }
 
         public string? ImportTheme { get; private set; }
         public string? ExportTheme { get; private set; }
@@ -63,6 +70,8 @@ namespace FreeSystemTray
                     case "--toggle": o.ShowHideCommand = ShowHide.ShowHideCommand.Toggle; break;
                     case "--show": o.ShowHideCommand = ShowHide.ShowHideCommand.Show; break;
                     case "--hide": o.ShowHideCommand = ShowHide.ShowHideCommand.Hide; break;
+                    case "--open-settings": o.ShowHideCommand = ShowHide.ShowHideCommand.Settings; break;
+                    case "--autostart": o.Autostart = true; break;
                     case "--import-theme": o.ImportTheme = Next(); break;
                     case "--export-theme": o.ExportTheme = Next(); break;
                     case "--no-watchdog": o.NoWatchdog = true; break;

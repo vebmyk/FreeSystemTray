@@ -45,20 +45,8 @@
                         MouseLeftButtonDown="Grip_MouseLeftButtonDown"
                         MouseMove="Grip_MouseMove"
                         MouseLeftButtonUp="Grip_MouseLeftButtonUp"
-                        LostMouseCapture="Grip_LostMouseCapture">
-                    <Border.ContextMenu>
-                        <ContextMenu Opened="GripMenu_Opened" Closed="GripMenu_Closed">
-                            <MenuItem x:Name="LockMenuItem" Header="_Lock position" IsCheckable="True" Click="LockMenuItem_Click" />
-                            <MenuItem x:Name="SnapMenuItem" Header="_Snap to screen edges" IsCheckable="True" Click="SnapMenuItem_Click" />
-                            <Separator />
-                            <MenuItem x:Name="AutoHideMenuItem" Header="_Auto-hide" IsCheckable="True" Click="AutoHideMenuItem_Click" />
-                            <MenuItem x:Name="HideMenuItem" Header="_Hide" Click="HideMenuItem_Click" />
-                            <Separator />
-                            <MenuItem x:Name="ThemeMenuItem" Header="_Theme" />
-                            <Separator />
-                            <MenuItem Header="E_xit FreeSystemTray" Click="ExitMenuItem_Click" />
-                        </ContextMenu>
-                    </Border.ContextMenu>
+                        LostMouseCapture="Grip_LostMouseCapture"
+                        MouseRightButtonUp="Grip_MouseRightButtonUp">
                 </Border>
                 <ItemsControl x:Name="IconList" Margin="{DynamicResource IconListMargin}" MinWidth="{DynamicResource CellSize}" MinHeight="{DynamicResource CellSize}">
                     <ItemsControl.ItemsPanel>

@@ -12,12 +12,18 @@ using FreeSystemTray.TrayHost;
 
 namespace FreeSystemTray.ShowHide
 {
-    /// <summary>What <c>--toggle</c>, <c>--show</c> and <c>--hide</c> send to the running instance (the wParam of <see cref="ShowHideController.CommandMessage"/>).</summary>
+    /// <summary>
+    /// What <c>--toggle</c>, <c>--show</c>, <c>--hide</c> and <c>--open-settings</c> send to the running
+    /// instance (the wParam of <see cref="ShowHideController.CommandMessage"/>).
+    /// </summary>
     public enum ShowHideCommand
     {
         Toggle = 0,
         Show = 1,
-        Hide = 2
+        Hide = 2,
+
+        /// <summary>Show the tray and open the settings window (also sent when the exe is started again).</summary>
+        Settings = 3
     }
 
     /// <summary>
@@ -273,6 +279,10 @@ namespace FreeSystemTray.ShowHide
                 {
                     case ShowHideCommand.Show: Show(ShowCause.Command); break;
                     case ShowHideCommand.Hide: Hide("command"); break;
+                    case ShowHideCommand.Settings:
+                        Show(ShowCause.Command);
+                        _window.OpenSettings?.Invoke(null);
+                        break;
                     default: Toggle(ShowCause.Command); break;
                 }
             }

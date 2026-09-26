@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices;
 using FreeSystemTray.TrayHost.Interop;
 
 namespace FreeSystemTray.TrayHost
@@ -22,8 +25,63 @@ namespace FreeSystemTray.TrayHost
             string topmost = RestoreExplorerTopmost();
             uint taskbarCreated = NativeMethods.RegisterWindowMessage("TaskbarCreated");
             NativeMethods.SendNotifyMessage(NativeMethods.HWND_BROADCAST, taskbarCreated, IntPtr.Zero, IntPtr.Zero);
-            return topmost + "; broadcast TaskbarCreated, so apps re-register their icons with Explorer";
+            return topmost + "; broadcast TaskbarCreated, so apps re-register their icons with Explorer; " + RemoveDeadIcons();
         }
+
+        /// <summary>
+        /// Removes the icons of windows that no longer exist from Explorer's tray: FreeSystemTray's own
+        /// icon, mirrored there, died with the process. Explorer removes such icons only when the
+        /// pointer passes over them.
+        /// </summary>
+        public static string RemoveDeadIcons()
+        {
+            List<ExplorerTrayButton>? buttons = ExplorerTrayIcons.Read(ExplorerTaskbar.Find(IntPtr.Zero));
+            if (buttons == null) return "Explorer's tray could not be read to remove dead icons";
+            int removed = 0;
+            foreach (ExplorerTrayButton b in buttons.Where(b => b.Window != IntPtr.Zero && !IsWindow(b.Window)))
+            {
+                var data = new NOTIFYICONDATA
+                {
+                    cbSize = Marshal.SizeOf<NOTIFYICONDATA>(),
+                    hWnd = b.Window,
+                    uID = b.Uid,
+                    uFlags = b.Guid != Guid.Empty ? NIF_GUID : 0,
+                    guidItem = b.Guid
+                };
+                if (Shell_NotifyIcon(NIM_DELETE, ref data)) removed++;
+            }
+            return $"removed {removed} icon{(removed == 1 ? "" : "s")} of windows that no longer exist";
+        }
+
+        private const uint NIM_DELETE = 2, NIF_GUID = 0x20;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct NOTIFYICONDATA
+        {
+            public int cbSize;
+            public IntPtr hWnd;
+            public uint uID;
+            public uint uFlags;
+            public uint uCallbackMessage;
+            public IntPtr hIcon;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
+            public uint dwState;
+            public uint dwStateMask;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+            public uint uVersion;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+            public uint dwInfoFlags;
+            public Guid guidItem;
+            public IntPtr hBalloonIcon;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool Shell_NotifyIcon(uint message, ref NOTIFYICONDATA data);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWindow(IntPtr hWnd);
 
         /// <summary>
         /// Gives Explorer's taskbar back the always-on-top flag ManagedShell removes when it takes the

@@ -26,6 +26,9 @@ namespace FreeSystemTray
         private SettingsWatcher? _settingsWatcher;
         private ThemeWatcher? _themeWatcher;
         private StateWriter? _stateWriter;
+        private AppNotifyIcon? _appIcon;
+        private SettingsWindow? _settingsWindow;
+        private readonly Autostart _autostart = new();
 
         public App(CommandLine options)
         {
@@ -59,10 +62,18 @@ namespace FreeSystemTray
             _singleInstance = new Mutex(true, SingleInstanceName, out bool created);
             if (!created)
             {
-                AppLog.Write("Another instance is already running; exiting");
                 _singleInstance.Dispose();
                 _singleInstance = null;
-                Shutdown(1);
+                // Started again by hand: bring up the running one, with its settings. At sign-in
+                // (an instance started by hand before the Run key's), just exit.
+                if (_options.Autostart)
+                {
+                    AppLog.Write("Another instance is already running; exiting");
+                    Shutdown(1);
+                    return;
+                }
+                AppLog.Write("Another instance is already running; showing its settings");
+                Shutdown(SendToRunningInstance(ShowHideCommand.Settings) ? 0 : 1);
                 return;
             }
 
@@ -84,6 +95,7 @@ namespace FreeSystemTray
             var store = new SettingsStore(_options.SettingsPath ?? SettingsStore.DefaultPath);
             AppSettings settings = store.Load(AppLog.Write);
             AppLog.Write($"Settings file: {store.FilePath}");
+            if (_options.Autostart) WaitForExplorersTaskbar();
 
             _host = new ManagedShellTrayHost(new TrayHostOptions
             {
@@ -116,13 +128,55 @@ namespace FreeSystemTray
                 return;
             }
 
-            if (_options.DiagDir != null) _stateWriter = new StateWriter(_host, window, _options.DiagDir);
+            // After the host started: our own icon goes to our tray, and is mirrored to Explorer's.
+            window.OpenSettings = OpenSettings;
+            _appIcon = new AppNotifyIcon(() => OpenSettings(null), () => window.ShowAppMenu(null));
+            if (settings.AppIcon) _appIcon.Show();
+            window.SettingsApplied += (_, _) =>
+            {
+                if (window.Settings.AppIcon) _appIcon.Show();
+                else _appIcon.Hide();
+            };
+
+            if (_options.DiagDir != null) _stateWriter = new StateWriter(_host, window, _options.DiagDir, () => _appIcon.IsShown, () => _settingsWindow);
             if (!_options.NoWatchdog) Watchdog.Launch(logDir);
+        }
+
+        /// <summary>Opens the settings window, or brings it to the front; at an icon if <paramref name="iconKey"/> is given.</summary>
+        private void OpenSettings(string? iconKey)
+        {
+            if (MainWindow is not TrayWindow tray) return;
+            if (_settingsWindow == null)
+            {
+                _settingsWindow = new SettingsWindow(tray, _autostart);
+                _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+                _settingsWindow.Show();
+                AppLog.Write("Settings window opened");
+            }
+            if (_settingsWindow.WindowState == WindowState.Minimized) _settingsWindow.WindowState = WindowState.Normal;
+            _settingsWindow.Activate();
+            if (iconKey != null) _settingsWindow.SelectIcon(iconKey);
+        }
+
+        /// <summary>
+        /// At sign-in the Run key can start the app before Explorer's taskbar exists; the tray host
+        /// role and the icon import need it. Waits up to a minute.
+        /// </summary>
+        private static void WaitForExplorersTaskbar()
+        {
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while (NativeMethods.FindWindow("Shell_TrayWnd", null) == IntPtr.Zero && waited.Elapsed < TimeSpan.FromMinutes(1))
+                Thread.Sleep(250);
+            AppLog.Write(waited.ElapsedMilliseconds < 250 ? "Started at sign-in; Explorer's taskbar is there"
+                : $"Started at sign-in; waited {waited.Elapsed.TotalSeconds:0.#} s for Explorer's taskbar" +
+                  (NativeMethods.FindWindow("Shell_TrayWnd", null) == IntPtr.Zero ? ", which is still missing" : ""));
         }
 
         protected override void OnExit(ExitEventArgs e)
         {
             _stateWriter?.Dispose();
+            // Before the host goes: the delete is mirrored to Explorer's tray, so no dead icon stays there.
+            _appIcon?.Dispose();
             _settingsWatcher?.Dispose();
             _themeWatcher?.Dispose();
             _showHide?.Dispose();
@@ -220,17 +274,17 @@ namespace FreeSystemTray
             }
         }
 
-        /// <summary>--toggle, --show, --hide: posted to the running instance's tray window.</summary>
+        /// <summary>--toggle, --show, --hide, --open-settings: posted to the running instance's tray window.</summary>
         private static bool SendToRunningInstance(ShowHideCommand command)
         {
             IntPtr window = TrayWindow.FindRunningInstance();
             if (window == IntPtr.Zero)
             {
-                AppLog.Write($"--{command.ToString().ToLowerInvariant()}: no running instance");
+                AppLog.Write($"{command}: no running instance");
                 return false;
             }
             bool sent = NativeMethods.PostMessage(window, (int)ShowHideController.CommandMessage, (IntPtr)(int)command, IntPtr.Zero);
-            AppLog.Write($"--{command.ToString().ToLowerInvariant()}: {(sent ? "sent" : "could not send")} to the running instance");
+            AppLog.Write($"{command}: {(sent ? "sent" : "could not send")} to the running instance");
             return sent;
         }
 
