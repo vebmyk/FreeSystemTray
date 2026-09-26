@@ -6,6 +6,7 @@ using System.Windows;
 using FreeSystemTray.Diagnostics;
 using FreeSystemTray.Logging;
 using FreeSystemTray.Settings;
+using FreeSystemTray.ShowHide;
 using FreeSystemTray.TrayHost;
 using ManagedShell.Common.Logging;
 using Microsoft.Win32;
@@ -19,6 +20,8 @@ namespace FreeSystemTray
         private readonly CommandLine _options;
         private Mutex? _singleInstance;
         private ManagedShellTrayHost? _host;
+        private ShowHideController? _showHide;
+        private SettingsWatcher? _settingsWatcher;
         private StateWriter? _stateWriter;
 
         public App(CommandLine options)
@@ -37,6 +40,11 @@ namespace FreeSystemTray
             if (_options.Exit)
             {
                 Shutdown(ExitRunningInstance() ? 0 : 1);
+                return;
+            }
+            if (_options.ShowHideCommand is ShowHideCommand command)
+            {
+                Shutdown(SendToRunningInstance(command) ? 0 : 1);
                 return;
             }
 
@@ -80,7 +88,10 @@ namespace FreeSystemTray
             });
             var window = new TrayWindow(_host, settings, store);
             MainWindow = window;
-            window.Show();
+            _showHide = new ShowHideController(window, _host, settings.ShowHide, AppLog.Write, _options.Verbose);
+            window.ShowHide = _showHide;
+            _showHide.Start(); // shows the window, unless auto-hide keeps it hidden
+            _settingsWatcher = new SettingsWatcher(store, Dispatcher, window.ApplySettings, AppLog.Write);
 
             try
             {
@@ -102,6 +113,8 @@ namespace FreeSystemTray
         protected override void OnExit(ExitEventArgs e)
         {
             _stateWriter?.Dispose();
+            _settingsWatcher?.Dispose();
+            _showHide?.Dispose();
             if (_host != null)
             {
                 AppLog.Write("Exiting: handing the tray back to Explorer");
@@ -153,6 +166,20 @@ namespace FreeSystemTray
             {
                 if (process != IntPtr.Zero) NativeMethods.CloseHandle(process);
             }
+        }
+
+        /// <summary>--toggle, --show, --hide: posted to the running instance's tray window.</summary>
+        private static bool SendToRunningInstance(ShowHideCommand command)
+        {
+            IntPtr window = TrayWindow.FindRunningInstance();
+            if (window == IntPtr.Zero)
+            {
+                AppLog.Write($"--{command.ToString().ToLowerInvariant()}: no running instance");
+                return false;
+            }
+            bool sent = NativeMethods.PostMessage(window, (int)ShowHideController.CommandMessage, (IntPtr)(int)command, IntPtr.Zero);
+            AppLog.Write($"--{command.ToString().ToLowerInvariant()}: {(sent ? "sent" : "could not send")} to the running instance");
+            return sent;
         }
 
         private static string Version =>

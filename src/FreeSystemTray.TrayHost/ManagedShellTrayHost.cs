@@ -460,14 +460,17 @@ namespace FreeSystemTray.TrayHost
                 IntPtr explorer = ExplorerTaskbar.Find(_trayHwnd);
                 if (explorer == IntPtr.Zero) return false;
                 IntPtr? r = Send(explorer, wParam, lParam);
-                bool answered = r is IntPtr value && value != IntPtr.Zero;
+                bool answered = r is IntPtr v && v != IntPtr.Zero;
+                // An icon Explorer does not have gets our position rather than none, unless our window
+                // is hidden: then there is no icon of ours to point at, and Explorer's answer stands.
+                bool stands = answered || (r != null && !TrayWindowVisible);
                 if (_options.TraceMessages)
                 {
-                    string text = answered ? IconRectQuery.DecodeResult(r!.Value).ToString() : "no answer; tray window answers";
+                    string text = answered ? IconRectQuery.DecodeResult(r!.Value).ToString()
+                        : stands ? "no answer, which stands: tray window hidden" : "no answer; tray window answers";
                     Log($"QUERY icon {q} -> Explorer ({why}): {text}");
                 }
-                // An icon Explorer does not have gets our position rather than none.
-                if (!answered) return false;
+                if (!stands) return false;
                 result = r!.Value;
                 return true;
             }

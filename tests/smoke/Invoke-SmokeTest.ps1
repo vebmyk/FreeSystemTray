@@ -11,9 +11,14 @@
     - the full-add fix-up after Explorer has forgotten an icon;
     - auto-hide queries answered by Explorer, and the hidden-icons chevron position;
     - with -SkipMouse left out: clicks and menus from our window, and icon-position answers that
-      depend on where the cursor is (this moves the real mouse; don't touch it meanwhile);
+      depend on where the cursor is;
+    - show/hide: --hide, --show and --toggle; icons keep registering while the window is hidden; a
+      settings file edit applies while running; with -SkipMouse left out also the hotspot, the
+      hotkey, click-away, the auto-hide timer, and a menu opened from the tray keeping it shown;
     - hand-back on a graceful exit and after the process is killed (watchdog).
   The balloon check shows a real Windows notification ("Balloon from SmokeA").
+  The mouse and keyboard checks move the real mouse and press the tray's hotkey (Ctrl+Alt+Shift+T)
+  and Esc. Before each one the test waits until nobody has touched mouse or keyboard for 1.5 s.
 
   Tested on Windows 10 22H2 with "Always show all icons" off. FreeSystemTray must not be running.
   Exit code: the number of failed checks.
@@ -104,6 +109,25 @@ function Log-Has([string]$name, [string]$pattern) {
     return [bool](Select-String -Path (Join-Path $OutDir "testtray-$name.log") -Pattern $pattern -Quiet)
 }
 
+# Simulated input only once the user has left mouse and keyboard alone for a moment.
+function Idle { Tool wait-idle 1500 120000 | Out-Null; if ($LASTEXITCODE -ne 0) { throw "Mouse or keyboard kept being used; stopped before simulating input." } }
+
+function Send-Command([string]$dir, [string]$command) {
+    Start-Process -FilePath $app -ArgumentList "$command --log-dir `"$dir\cmd`"" -Wait | Out-Null
+}
+
+function Is-Shown([string]$dir) { $s = Read-State $dir; return [bool]($s -and $s.shown -and $s.visible) }
+function Is-Hidden([string]$dir) { $s = Read-State $dir; return [bool]($s -and -not $s.shown -and -not $s.visible -and -not $s.trayWindowVisible) }
+
+# The last "Shown (...)" or "Hidden (...)" line of the app's log.
+function Last-ShowHide([string]$dir) {
+    $line = Select-String -Path (Join-Path $dir "FreeSystemTray.log") -Pattern "^\S+ \S+ (Shown|Hidden) \(" | Select-Object -Last 1
+    if ($line) { return $line.Line.Substring(24) }
+    return ""
+}
+
+function Write-Settings([string]$json) { Set-Content -Path (Join-Path $OutDir "settings.json") -Value $json -Encoding UTF8 }
+
 # --- Preconditions -------------------------------------------------------------------------
 if (Get-Process FreeSystemTray -ErrorAction SilentlyContinue) { throw "FreeSystemTray is running; exit it first (FreeSystemTray.exe --exit)." }
 if (-not $SkipBuild) {
@@ -165,15 +189,18 @@ try {
 
     # --- Mouse: clicks from our window, position answers by cursor --------------------------
     if (-not $SkipMouse) {
+        Idle
         Check "right-click on a v0 icon: WM_RBUTTONUP and its menu opens" ((Click-Icon $run "SmokeA" "right") -and
             (Wait-Until { Log-Has "SmokeA" "MENU OPEN" } 3000) -and (Log-Has "SmokeA" "EVENT WM_RBUTTONUP"))
         Tool key esc | Out-Null
         Start-Sleep -Milliseconds 500
         $b = Our-Icon $run "SmokeB"
         $ourRect = "[$($b.rect[0]),$($b.rect[1]),$([int]$b.rect[0] + [int]$b.rect[2]),$([int]$b.rect[1] + [int]$b.rect[3])]"
+        Idle
         Check "left-click on a v4 icon: NIN_SELECT, and the app is told our icon's rectangle" ((Click-Icon $run "SmokeB" "left") -and
             (Wait-Until { Log-Has "SmokeB" ("NIN_SELECT .*iconRect=" + [regex]::Escape($ourRect)) } 3000)) "expected iconRect=$ourRect"
 
+        Idle
         $w = (Read-State $run).window
         Tool move ([int]$w[0] + 5) ([int]$w[1] + [int]($w[3] / 2)) | Out-Null
         Start-Sleep -Milliseconds 200
@@ -191,6 +218,95 @@ try {
                 ($theirs -like "icon rect*" -or $theirs -like "*0x00000001")) "$theirs vs ours $ours"
         }
     }
+
+    # --- Show/hide: commands, the hidden state, a settings edit while running ---------------
+    $hotkey = (Read-State $run).hotkey
+    Check "the default hotkey is registered" ($hotkey -eq "Ctrl+Alt+Shift+T") "hotkey: $hotkey (in use by another program?)"
+    Send-Command $run "--hide"
+    Check "--hide hides the window, and Explorer answers position queries meanwhile" (Wait-Until { Is-Hidden $run } 3000) (Last-ShowHide $run)
+    $script:started += Start-Process -FilePath $testApp -ArgumentList "--name SmokeD --uid 104 --log `"$OutDir`" --color #F39C12" -PassThru
+    Check "icon added while hidden reaches our host" (Wait-Until { Our-Icon $run "SmokeD" } 5000)
+    Check "icon added while hidden reaches Explorer's tray" (Wait-Until { Explorer-Tip "SmokeD" } 5000)
+    Post "SmokeD" 1
+    Check "tooltip change while hidden reaches our host" (Wait-Until { (Our-Icon $run "SmokeD").tip -eq "SmokeD tip #1" } 5000)
+    if (-not $SkipMouse) {
+        Idle
+        $w = (Read-State $run).window
+        Tool move ([int]$w[0] + [int]($w[2] / 2)) ([int]$w[1] + [int]($w[3] / 2)) | Out-Null
+        Start-Sleep -Milliseconds 200
+        $d = Our-Icon $run "SmokeD"
+        $answer = Tool iconrect $d.hwnd $d.uid
+        $inWindow = $false
+        if ($answer -match "icon rect \[(-?\d+),(-?\d+),\d+,\d+\]") {
+            $inWindow = [int]$Matches[1] -ge [int]$w[0] -and [int]$Matches[1] -lt [int]$w[0] + [int]$w[2] -and [int]$Matches[2] -ge [int]$w[1] -and [int]$Matches[2] -lt [int]$w[1] + [int]$w[3]
+        }
+        Check "hidden, cursor on the tray's spot: apps get Explorer's answer, not the hidden window's" (-not $inWindow -and
+            ($answer -like "icon rect*" -or $answer -like "*0x00000001")) "$answer; window [$($w -join ',')]"
+    }
+    Send-Command $run "--show"
+    Check "--show shows it again, with the icon added while hidden in place" (Wait-Until { (Is-Shown $run) -and (Our-Icon $run "SmokeD").rect } 3000) (Last-ShowHide $run)
+    Send-Command $run "--toggle"
+    $toggledOff = Wait-Until { Is-Hidden $run } 3000
+    Send-Command $run "--toggle"
+    Check "--toggle hides, then shows" ($toggledOff -and (Wait-Until { Is-Shown $run } 3000)) (Last-ShowHide $run)
+
+    # Auto-hide, switched on by editing the settings file while the app runs.
+    Write-Settings '{ "showHide": { "autoHide": true, "hotspot": "Left", "hideDelayMs": 800 } }'
+    Check "a settings file edit applies while running (auto-hide on)" (Wait-Until { (Read-State $run).autoHide -eq $true } 5000)
+    Start-Sleep -Milliseconds 1500
+    Check "switching auto-hide on does not hide the tray before it is used" (Is-Shown $run)
+
+    # --- Show/hide with the mouse and the hotkey ---------------------------------------------
+    if (-not $SkipMouse) {
+        Send-Command $run "--hide"
+        [void](Wait-Until { Is-Hidden $run } 3000)
+        $h = (Read-State $run).hotspot
+        $w = (Read-State $run).window
+        $away = @(([int]$h[0] + 200), ([int]$h[1] + 200))   # on the tray's monitor, clear of tray and hotspot
+        Idle
+        Tool move ([int]$h[0]) ([int]$h[1] + [int]($h[3] / 2)) | Out-Null
+        Check "the hotspot (left screen edge) shows the tray" (Wait-Until { Is-Shown $run } 3000) (Last-ShowHide $run)
+        Tool move $away[0] $away[1] | Out-Null
+        Check "it hides 0.8 s after the pointer leaves the hotspot" ((Wait-Until { Is-Hidden $run } 4000) -and
+            (Last-ShowHide $run) -like "Hidden (800 ms after the pointer left)") (Last-ShowHide $run)
+
+        if ($hotkey) {
+            Idle
+            Tool key ctrl+alt+shift+t | Out-Null
+            Check "the hotkey shows the tray" (Wait-Until { Is-Shown $run } 2000) (Last-ShowHide $run)
+            Start-Sleep -Milliseconds 1500
+            Check "shown by the hotkey, the timer waits for the pointer to visit it" (Is-Shown $run)
+            Idle
+            Tool click-target $away[0] $away[1] | Out-Null
+            Check "a click elsewhere hides it" ((Wait-Until { Is-Hidden $run } 2000) -and (Last-ShowHide $run) -like "Hidden (click away*") (Last-ShowHide $run)
+
+            Idle
+            Tool key ctrl+alt+shift+t | Out-Null
+            [void](Wait-Until { Is-Shown $run } 2000)
+            Start-Sleep -Milliseconds 300
+            $menusBefore = @(Select-String -Path (Join-Path $OutDir "testtray-SmokeA.log") -Pattern "MENU OPEN").Count
+            Idle
+            [void](Click-Icon $run "SmokeA" "right")
+            [void](Wait-Until { @(Select-String -Path (Join-Path $OutDir "testtray-SmokeA.log") -Pattern "MENU OPEN").Count -gt $menusBefore } 3000)
+            Tool move $away[0] $away[1] | Out-Null
+            Start-Sleep -Milliseconds 2000
+            Check "a menu opened from the tray keeps it shown (pointer away for 2 s)" (Is-Shown $run) (Last-ShowHide $run)
+            Idle
+            Tool key esc | Out-Null
+            Check "once that menu closes, it hides after the delay" ((Wait-Until { Is-Hidden $run } 4000) -and
+                (Last-ShowHide $run) -like "Hidden (800 ms after the pointer left)") (Last-ShowHide $run)
+
+            Idle
+            Tool key ctrl+alt+shift+t | Out-Null
+            $on = Wait-Until { Is-Shown $run } 2000
+            Start-Sleep -Milliseconds 300
+            Tool key ctrl+alt+shift+t | Out-Null
+            Check "the hotkey toggles: shows, then hides" ($on -and (Wait-Until { Is-Hidden $run } 2000)) (Last-ShowHide $run)
+        }
+        else { Write-Host "SKIP  hotkey checks: the hotkey is not registered" }
+    }
+    Write-Settings '{ }'
+    Check "switching auto-hide off shows the tray again" (Wait-Until { (Is-Shown $run) -and (Read-State $run).autoHide -eq $false } 5000) (Last-ShowHide $run)
 
     # --- Graceful exit ----------------------------------------------------------------------
     Post "SmokeC" 1
@@ -216,7 +332,7 @@ try {
 }
 finally {
     if (Get-Process FreeSystemTray -ErrorAction SilentlyContinue) { [void](Stop-App (Join-Path $OutDir "cleanup")) }
-    foreach ($name in "SmokeA", "SmokeB", "SmokeC") { Post $name 6 }   # each test app deletes its icon and exits
+    foreach ($name in "SmokeA", "SmokeB", "SmokeC", "SmokeD") { Post $name 6 }   # each test app deletes its icon and exits
     Start-Sleep -Milliseconds 800
     foreach ($p in $script:started) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
 }

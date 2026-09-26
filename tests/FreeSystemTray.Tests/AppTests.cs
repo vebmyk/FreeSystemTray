@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using FreeSystemTray.Placement;
 using FreeSystemTray.Settings;
+using FreeSystemTray.ShowHide;
 using Xunit;
 
 namespace FreeSystemTray.Tests
@@ -34,6 +35,75 @@ namespace FreeSystemTray.Tests
             Assert.Null(loaded.Position);
             Assert.False(loaded.LockPosition);
             Assert.True(loaded.SnapToEdges);
+            Assert.False(loaded.ShowHide.AutoHide);
+            Assert.Equal("Ctrl+Alt+Shift+T", loaded.ShowHide.Hotkey);
+            Assert.Equal(HotspotLocation.None, loaded.ShowHide.Hotspot);
+        }
+
+        [Fact]
+        public void Show_hide_settings_survive_a_save_and_load()
+        {
+            var store = new SettingsStore(File1);
+            store.Save(new AppSettings
+            {
+                ShowHide = new ShowHideSettings
+                {
+                    AutoHide = true, HideOnClickAway = false, HideDelayMs = 800, Hotkey = "Win+Alt+Y",
+                    Hotspot = HotspotLocation.TopLeft, HotspotDelayMs = 50, Animation = TrayAnimation.Slide, AnimationMs = 300
+                }
+            });
+
+            ShowHideSettings loaded = store.Load().ShowHide;
+
+            Assert.True(loaded.AutoHide);
+            Assert.False(loaded.HideOnClickAway);
+            Assert.Equal(800, loaded.HideDelayMs);
+            Assert.Equal("Win+Alt+Y", loaded.Hotkey);
+            Assert.Equal(HotspotLocation.TopLeft, loaded.Hotspot);
+            Assert.Equal(50, loaded.HotspotDelayMs);
+            Assert.Equal(TrayAnimation.Slide, loaded.Animation);
+            Assert.Equal(300, loaded.AnimationMs);
+            Assert.Contains("\"hotspot\": \"TopLeft\"", File.ReadAllText(File1));
+        }
+
+        [Fact]
+        public void A_file_from_before_show_hide_or_with_it_null_gets_its_defaults()
+        {
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(File1, "{ \"lockPosition\": true }");
+            Assert.False(new SettingsStore(File1).Load().ShowHide.AutoHide);
+            File.WriteAllText(File1, "{ \"showHide\": null }");
+            Assert.NotNull(new SettingsStore(File1).Load().ShowHide);
+        }
+
+        [Fact]
+        public void Reload_ignores_our_own_save_and_picks_up_an_edit()
+        {
+            var store = new SettingsStore(File1);
+            store.Save(new AppSettings { LockPosition = true });
+            Assert.Null(store.Reload(out string? error));
+            Assert.Null(error);
+
+            File.WriteAllText(File1, File.ReadAllText(File1).Replace("\"autoHide\": false", "\"autoHide\": true"));
+            AppSettings? edited = store.Reload(out error);
+
+            Assert.Null(error);
+            Assert.True(edited!.ShowHide.AutoHide);
+            Assert.True(edited.LockPosition);
+            Assert.Null(store.Reload(out _)); // already applied
+        }
+
+        [Fact]
+        public void Reload_reports_a_broken_edit_and_leaves_the_file_alone()
+        {
+            var store = new SettingsStore(File1);
+            store.Save(new AppSettings());
+            File.WriteAllText(File1, "{ \"showHide\": { \"autoHide\": tru");
+
+            Assert.Null(store.Reload(out string? error));
+
+            Assert.NotNull(error);
+            Assert.False(File.Exists(File1 + ".bad"));
         }
 
         [Fact]
@@ -76,6 +146,16 @@ namespace FreeSystemTray.Tests
             Assert.Equal(@"C:\s.json", o.SettingsPath);
             Assert.Equal(@"C:\logs", o.EffectiveLogDir);
             Assert.True(o.Exit && o.NoWatchdog && o.NoMirror && o.NoTopmostFix && o.NoAutoHideForward && o.NoQueryRouting);
+        }
+
+        [Theory]
+        [InlineData("--toggle", ShowHideCommand.Toggle)]
+        [InlineData("--show", ShowHideCommand.Show)]
+        [InlineData("--hide", ShowHideCommand.Hide)]
+        public void Show_and_hide_commands_are_read(string arg, ShowHideCommand expected)
+        {
+            Assert.Equal(expected, CommandLine.Parse(new[] { arg }).ShowHideCommand);
+            Assert.Null(CommandLine.Parse(Array.Empty<string>()).ShowHideCommand);
         }
 
         [Fact]

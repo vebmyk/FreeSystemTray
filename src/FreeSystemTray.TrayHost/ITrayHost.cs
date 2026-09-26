@@ -27,7 +27,10 @@ namespace FreeSystemTray.TrayHost
         /// </summary>
         void SetTrayWindowBounds(PixelRect bounds, ScreenEdge edge);
 
-        /// <summary>Whether the tray window is shown. While it is hidden, Explorer answers position queries.</summary>
+        /// <summary>
+        /// Whether the tray window is shown. While it is hidden, Explorer answers icon- and
+        /// taskbar-position queries, so menus and flyouts open at the taskbar; icons keep registering.
+        /// </summary>
         bool TrayWindowVisible { get; set; }
 
         event EventHandler<TrayBalloonEventArgs>? BalloonReceived;

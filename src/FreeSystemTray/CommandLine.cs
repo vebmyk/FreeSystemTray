@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using FreeSystemTray.ShowHide;
 
 namespace FreeSystemTray
 {
@@ -13,6 +14,7 @@ namespace FreeSystemTray
     ///   --diag DIR        write state.json (icons, their screen rectangles, host status) for the smoke
     ///                     test into DIR; implies --log-dir DIR and --verbose
     ///   --exit            close the running instance and wait for it to exit
+    ///   --toggle, --show, --hide   show or hide the running instance's window
     ///   --no-watchdog     do not start the watchdog process
     ///   --no-mirror, --no-topmost-fix, --no-autohide-forward, --no-query-routing
     ///                     turn off one workaround (ManagedShell as shipped), for comparison tests
@@ -26,6 +28,10 @@ namespace FreeSystemTray
         public string? DiagDir { get; private set; }
         public bool Verbose { get; private set; }
         public bool Exit { get; private set; }
+
+        /// <summary>--toggle, --show or --hide: sent to the running instance.</summary>
+        public ShowHideCommand? ShowHideCommand { get; private set; }
+
         public bool NoWatchdog { get; private set; }
         public bool NoMirror { get; private set; }
         public bool NoTopmostFix { get; private set; }
@@ -49,6 +55,9 @@ namespace FreeSystemTray
                     case "--diag": o.DiagDir = Next(); o.Verbose = true; break;
                     case "--verbose": o.Verbose = true; break;
                     case "--exit": o.Exit = true; break;
+                    case "--toggle": o.ShowHideCommand = ShowHide.ShowHideCommand.Toggle; break;
+                    case "--show": o.ShowHideCommand = ShowHide.ShowHideCommand.Show; break;
+                    case "--hide": o.ShowHideCommand = ShowHide.ShowHideCommand.Hide; break;
                     case "--no-watchdog": o.NoWatchdog = true; break;
                     case "--no-mirror": o.NoMirror = true; break;
                     case "--no-topmost-fix": o.NoTopmostFix = true; break;

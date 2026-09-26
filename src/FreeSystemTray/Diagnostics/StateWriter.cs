@@ -12,8 +12,8 @@ namespace FreeSystemTray.Diagnostics
 {
     /// <summary>
     /// With --diag DIR: writes DIR\state.json every 250 ms when it changes. It lists the host status,
-    /// Explorer's taskbar flags, the window's bounds and every icon with its screen rectangle. The
-    /// smoke test reads it to find icons to click.
+    /// Explorer's taskbar flags, the window's bounds and visibility, and every icon with its screen
+    /// rectangle. The smoke test reads it to find icons to click.
     /// </summary>
     internal sealed class StateWriter : IDisposable
     {
@@ -44,11 +44,18 @@ namespace FreeSystemTray.Diagnostics
         private void Write()
         {
             PixelRect w = _window.ScreenBounds;
+            PixelRect hotspot = _window.ShowHide?.HotspotZone ?? default;
             var state = new Dictionary<string, object?>
             {
                 ["pid"] = Environment.ProcessId,
                 ["windowHandle"] = Hex(_window.Handle),
                 ["window"] = new[] { w.Left, w.Top, w.Width, w.Height },
+                ["visible"] = _window.IsVisible,
+                ["shown"] = _window.ShowHide?.IsShown,
+                ["trayWindowVisible"] = _host.TrayWindowVisible,
+                ["autoHide"] = _window.ShowHide?.AutoHide,
+                ["hotkey"] = _window.ShowHide?.Hotkey?.ToString(),
+                ["hotspot"] = hotspot.IsEmpty ? null : new[] { hotspot.Left, hotspot.Top, hotspot.Width, hotspot.Height },
                 ["shell"] = Shell(),
                 ["iconCount"] = _host.Icons.Count,
                 ["icons"] = _host.Icons.Select(Describe).ToList(),

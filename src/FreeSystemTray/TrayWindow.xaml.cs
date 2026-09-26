@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -10,6 +11,7 @@ using System.Windows.Threading;
 using FreeSystemTray.Logging;
 using FreeSystemTray.Placement;
 using FreeSystemTray.Settings;
+using FreeSystemTray.ShowHide;
 using FreeSystemTray.TrayHost;
 
 namespace FreeSystemTray
@@ -18,7 +20,7 @@ namespace FreeSystemTray
     /// The floating tray: a borderless, topmost tool window that never takes focus (WS_EX_NOACTIVATE,
     /// WS_EX_TOOLWINDOW), so it stays out of Alt+Tab and apps can still take the foreground for their
     /// menus. It sizes itself around the icons with its anchor corner fixed, and can be dragged by the
-    /// grip on its left edge unless the position is locked.
+    /// grip on its left edge unless the position is locked. <see cref="ShowHide"/> shows and hides it.
     /// </summary>
     public partial class TrayWindow : Window
     {
@@ -26,13 +28,15 @@ namespace FreeSystemTray
         private const double IconSize = 16;
 
         private readonly ITrayHost _host;
-        private readonly AppSettings _settings;
         private readonly SettingsStore _store;
         private readonly Dictionary<ITrayIcon, PixelRect> _iconBounds = new();
+        private AppSettings _settings;
         private IntPtr _hwnd;
         private bool _placementQueued;
         private bool _boundsQueued;
         private PixelRect _reportedBounds;
+        private ScreenEdge _reportedEdge = ScreenEdge.Bottom;
+        private bool _gripMenuOpen;
         private bool _dragging;
         private PixelPoint _dragStartCursor;
         private PixelRect _dragStartBounds;
@@ -62,10 +66,49 @@ namespace FreeSystemTray
         /// <summary>The window's bounds as last reported to the host, in physical pixels.</summary>
         public PixelRect ScreenBounds => _reportedBounds;
 
+        /// <summary>The screen edge the window is nearest to, as last reported to the host.</summary>
+        public ScreenEdge Edge => _reportedEdge;
+
         /// <summary>Each visible icon's bounds as last reported to the host, in physical pixels.</summary>
         public IReadOnlyDictionary<ITrayIcon, PixelRect> IconBounds => _iconBounds;
 
         public IntPtr Handle => _hwnd;
+
+        /// <summary>Shows and hides the window; set once by the app before the window is shown.</summary>
+        internal ShowHideController? ShowHide { get; set; }
+
+        /// <summary>The element the slide animation moves.</summary>
+        internal UIElement AnimatedContent => ContentHost;
+
+        /// <summary>The window is being dragged or its menu is open: auto-hide waits.</summary>
+        public bool IsBusy => _dragging || _gripMenuOpen;
+
+        /// <summary>Lays the window out and places it before it is shown again: it may have changed size while hidden.</summary>
+        internal void PrepareToShow()
+        {
+            UpdateLayout();
+            ApplyPlacement();
+        }
+
+        /// <summary>Puts the window on top of the other always-on-top windows, without activating it.</summary>
+        internal void BringToTop()
+        {
+            if (_hwnd != IntPtr.Zero)
+                NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        }
+
+        /// <summary>Reports the window's and icons' positions to the host again (after the show animation moved them).</summary>
+        internal void RefreshBounds() => QueueBoundsReport();
+
+        /// <summary>Applies settings read from the settings file after it was edited.</summary>
+        internal void ApplySettings(AppSettings settings)
+        {
+            _settings = settings;
+            UpdateGrip();
+            QueuePlacement();
+            ShowHide?.ApplySettings(settings.ShowHide);
+        }
 
         /// <summary>The tray window of another running instance, if any.</summary>
         public static IntPtr FindRunningInstance()
@@ -150,6 +193,7 @@ namespace FreeSystemTray
                     ? PlacementMath.NearestEdge(bounds, PlacementMath.MonitorFor(bounds, monitors).WorkArea)
                     : ScreenEdge.Bottom;
                 _reportedBounds = bounds;
+                _reportedEdge = edge;
                 _host.SetTrayWindowBounds(bounds, edge);
             }
             UpdateIconBounds();
@@ -254,12 +298,21 @@ namespace FreeSystemTray
 
         private void GripMenu_Opened(object sender, RoutedEventArgs e)
         {
+            _gripMenuOpen = true;
             LockMenuItem.IsChecked = _settings.LockPosition;
             SnapMenuItem.IsChecked = _settings.SnapToEdges;
+            AutoHideMenuItem.IsChecked = _settings.ShowHide.AutoHide;
+            // Hiding needs a way back: the hotkey or the hotspot.
+            HideMenuItem.IsEnabled = ShowHide?.CanShowAgain == true;
+            HideMenuItem.InputGestureText = ShowHide?.Hotkey?.ToString() ?? "";
+            HideMenuItem.ToolTip = ShowHide?.CanShowAgain == true ? null
+                : "Set a hotkey or a hotspot in the settings file to be able to hide the tray." +
+                  (ShowHide?.HotkeyProblem is string problem ? " Hotkey: " + problem : "");
+            ToolTipService.SetShowOnDisabled(HideMenuItem, true);
             // The window never activates by itself (WS_EX_NOACTIVATE), so without this the menu gets
             // no keyboard input (Esc, arrows). Explorer's taskbar menus take the foreground the same way.
             NativeMethods.SetForegroundWindow(_hwnd);
-            ((System.Windows.Controls.ContextMenu)sender).Focus();
+            ((ContextMenu)sender).Focus();
         }
 
         private void LockMenuItem_Click(object sender, RoutedEventArgs e)
@@ -269,11 +322,22 @@ namespace FreeSystemTray
             UpdateGrip();
         }
 
+        private void GripMenu_Closed(object sender, RoutedEventArgs e) => _gripMenuOpen = false;
+
         private void SnapMenuItem_Click(object sender, RoutedEventArgs e)
         {
             _settings.SnapToEdges = SnapMenuItem.IsChecked;
             SaveSettings();
         }
+
+        private void AutoHideMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            _settings.ShowHide.AutoHide = AutoHideMenuItem.IsChecked;
+            SaveSettings();
+            ShowHide?.ApplySettings(_settings.ShowHide);
+        }
+
+        private void HideMenuItem_Click(object sender, RoutedEventArgs e) => ShowHide?.Hide("menu");
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e) => Close();
 
@@ -324,14 +388,18 @@ namespace FreeSystemTray
             e.Handled = true;
         }
 
+        // Clicks are noted before the app hears of them: the menu or flyout it opens in response
+        // counts as part of the tray for auto-hide.
         private void Icon_MouseDown(object sender, MouseButtonEventArgs e)
         {
+            ShowHide?.NoteTrayClick();
             IconOf(sender)?.OnMouseDown(e.ChangedButton);
             e.Handled = true;
         }
 
         private void Icon_MouseUp(object sender, MouseButtonEventArgs e)
         {
+            ShowHide?.NoteTrayClick();
             IconOf(sender)?.OnMouseUp(e.ChangedButton);
             e.Handled = true;
         }

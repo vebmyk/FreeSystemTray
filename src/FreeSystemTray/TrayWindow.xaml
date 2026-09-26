@@ -8,12 +8,17 @@
         ShowInTaskbar="False"
         ShowActivated="False"
         Topmost="True"
-        Background="#FF2B2B2B"
+        AllowsTransparency="True"
+        Background="Transparent"
         UseLayoutRounding="True">
     <!-- The window is sized in code around ContentHost's measured size, so it can keep its anchor
-         corner in place (SizeToContent would always keep the top-left corner). -->
+         corner in place (SizeToContent would always keep the top-left corner).
+         The window is per-pixel transparent (a layered window drawn by WPF) and the background is
+         drawn by the content, so the show/hide animations only change the content: its opacity for
+         a fade, its position for a slide (the window clips whatever moves outside it). WPF does not
+         let a window without AllowsTransparency become layered, so it could not fade otherwise. -->
     <local:ContentSizeHost x:Name="ContentHost">
-        <Border BorderBrush="#FF6A6A6A" BorderThickness="1">
+        <Border Background="#FF2B2B2B" BorderBrush="#FF6A6A6A" BorderThickness="1">
             <DockPanel>
                 <Border x:Name="Grip"
                         DockPanel.Dock="Left"
@@ -25,9 +30,12 @@
                         MouseLeftButtonUp="Grip_MouseLeftButtonUp"
                         LostMouseCapture="Grip_LostMouseCapture">
                     <Border.ContextMenu>
-                        <ContextMenu Opened="GripMenu_Opened">
+                        <ContextMenu Opened="GripMenu_Opened" Closed="GripMenu_Closed">
                             <MenuItem x:Name="LockMenuItem" Header="_Lock position" IsCheckable="True" Click="LockMenuItem_Click" />
                             <MenuItem x:Name="SnapMenuItem" Header="_Snap to screen edges" IsCheckable="True" Click="SnapMenuItem_Click" />
+                            <Separator />
+                            <MenuItem x:Name="AutoHideMenuItem" Header="_Auto-hide" IsCheckable="True" Click="AutoHideMenuItem_Click" />
+                            <MenuItem x:Name="HideMenuItem" Header="_Hide" Click="HideMenuItem_Click" />
                             <Separator />
                             <MenuItem Header="E_xit FreeSystemTray" Click="ExitMenuItem_Click" />
                         </ContextMenu>

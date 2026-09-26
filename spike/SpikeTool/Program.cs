@@ -17,7 +17,13 @@ namespace SpikeTool
     ///   click X Y [left|right|middle|double]
     ///   move X Y                  move the cursor (hover)
     ///   drag X1 Y1 X2 Y2          left-button drag
-    ///   key esc|enter|win+a|win+b
+    ///   key KEYS                  press a key or chord: esc, enter, or modifiers (ctrl, alt, shift, win)
+    ///                             plus a letter, digit or f1..f24, for example ctrl+alt+shift+t or win+b
+    ///   idle                      milliseconds since the last keyboard or mouse input (any, also simulated)
+    ///   wait-idle MS [TIMEOUT]    wait until nobody has touched mouse or keyboard for MS milliseconds;
+    ///                             exit code 3 if that did not happen within TIMEOUT ms (default 60000)
+    ///   click-target X Y [left|right]  show a window of our own at X,Y (120x60, never activated),
+    ///                             click it, close it: a harmless place to click "somewhere else"
     ///   post "WINDOW TITLE" N     PostMessage(WM_APP+N)
     ///   taskbarcreated [HWND]     broadcast the TaskbarCreated message (or post it to one window)
     ///   appbar                    what apps see from the tray host: ABM_GETTASKBARPOS, ABM_GETSTATE,
@@ -49,6 +55,9 @@ namespace SpikeTool
                     case "move": W.SetCursorPos(I(args[1]), I(args[2])); break;
                     case "drag": Drag(I(args[1]), I(args[2]), I(args[3]), I(args[4])); break;
                     case "key": Key(args[1]); break;
+                    case "idle": Console.WriteLine($"idle {IdleMs()} ms"); break;
+                    case "wait-idle": return WaitIdle(I(args[1]), args.Length > 2 ? I(args[2]) : 60_000);
+                    case "click-target": ClickTarget(I(args[1]), I(args[2]), args.Length > 3 ? args[3] : "left"); break;
                     case "post": Post(args[1], I(args[2])); break;
                     case "replay-add": ReplayAdd(args); break;
                     case "taskbarcreated":
@@ -302,20 +311,95 @@ namespace SpikeTool
             W.SendInput(1, new[] { inputs[1] }, Marshal.SizeOf<W.INPUT>());
         }
 
-        private static void Key(string name)
+        private static void Key(string chord)
         {
-            ushort[] vks = name.ToLowerInvariant() switch
+            var vks = new List<ushort>();
+            foreach (string part in chord.ToLowerInvariant().Split('+'))
             {
-                "esc" => new ushort[] { 0x1B },
-                "enter" => new ushort[] { 0x0D },
-                "win+a" => new ushort[] { 0x5B, 0x41 },
-                "win+b" => new ushort[] { 0x5B, 0x42 },
-                _ => throw new ArgumentException(name)
-            };
+                vks.Add(part switch
+                {
+                    "esc" => 0x1B,
+                    "enter" => 0x0D,
+                    "ctrl" => 0x11,
+                    "alt" => 0x12,
+                    "shift" => 0x10,
+                    "win" => 0x5B,
+                    _ when part.Length == 1 && char.IsAsciiLetterOrDigit(part[0]) => char.ToUpperInvariant(part[0]),
+                    _ when part.Length > 1 && part[0] == 'f' && int.TryParse(part[1..], out int f) && f is >= 1 and <= 24 => (ushort)(0x6F + f),
+                    _ => throw new ArgumentException(chord)
+                });
+            }
             var list = new List<W.INPUT>();
             foreach (var vk in vks) list.Add(new W.INPUT { type = 1, ki = new W.KEYBDINPUT { wVk = vk } });
-            for (int i = vks.Length - 1; i >= 0; i--) list.Add(new W.INPUT { type = 1, ki = new W.KEYBDINPUT { wVk = vks[i], dwFlags = 0x0002 } });
+            for (int i = vks.Count - 1; i >= 0; i--) list.Add(new W.INPUT { type = 1, ki = new W.KEYBDINPUT { wVk = vks[i], dwFlags = 0x0002 } });
             W.SendInput((uint)list.Count, list.ToArray(), Marshal.SizeOf<W.INPUT>());
+        }
+
+        private static uint IdleMs()
+        {
+            var info = new W.LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<W.LASTINPUTINFO>() };
+            W.GetLastInputInfo(ref info);
+            return unchecked((uint)Environment.TickCount - info.dwTime);
+        }
+
+        /// <summary>Waits for the user to leave mouse and keyboard alone, so simulated input does not mix with theirs.</summary>
+        private static int WaitIdle(int ms, int timeoutMs)
+        {
+            var sw = Stopwatch.StartNew();
+            while (IdleMs() < ms)
+            {
+                if (sw.ElapsedMilliseconds > timeoutMs)
+                {
+                    Console.WriteLine($"not idle for {ms} ms within {timeoutMs} ms");
+                    return 3;
+                }
+                Thread.Sleep(100);
+            }
+            Console.WriteLine($"idle {IdleMs()} ms after waiting {sw.ElapsedMilliseconds} ms");
+            return 0;
+        }
+
+        /// <summary>
+        /// Clicks "somewhere else" without touching anyone else's window: a plain always-on-top window
+        /// of this process, shown for the click and closed again. It never activates (WS_EX_NOACTIVATE),
+        /// so the click is the only thing that happens: no change of foreground window.
+        /// </summary>
+        private static void ClickTarget(int x, int y, string kind)
+        {
+            const int WS_POPUP = unchecked((int)0x80000000), WS_BORDER = 0x00800000, SS_NOTIFY = 0x0100;
+            const int WS_EX_TOPMOST = 0x8, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
+            // SS_NOTIFY: a static control is otherwise transparent to clicks, which would land on whatever is below.
+            IntPtr h = W.CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "STATIC", "SpikeTool click target",
+                WS_POPUP | WS_BORDER | SS_NOTIFY, x, y, 120, 60, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (h == IntPtr.Zero) throw new InvalidOperationException("could not create the click target");
+            try
+            {
+                // Created hidden and shown without activation: a new process's first window created
+                // visible takes the foreground even with WS_EX_NOACTIVATE.
+                W.ShowWindow(h, 4); // SW_SHOWNOACTIVATE
+                Pump(200);
+                Click(x + 60, y + 30, kind);
+                Pump(300);
+                Console.WriteLine($"clicked target 0x{h.ToInt64():X} at {x + 60},{y + 30}; foreground now 0x{W.GetForegroundWindow().ToInt64():X}");
+            }
+            finally
+            {
+                W.DestroyWindow(h);
+            }
+        }
+
+        private static void Pump(int ms)
+        {
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < ms)
+            {
+                while (W.PeekMessage(out W.MSG msg, IntPtr.Zero, 0, 0, 1))
+                {
+                    W.TranslateMessage(ref msg);
+                    W.DispatchMessage(ref msg);
+                }
+                Thread.Sleep(10);
+            }
         }
 
         #endregion
@@ -630,6 +714,16 @@ namespace SpikeTool
             public IntPtr lpData;
         }
 
+        [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize, dwTime; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MSG { public IntPtr hwnd; public int message; public IntPtr wParam, lParam; public uint time; public POINT pt; }
+
+        [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+        [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+        [DllImport("user32.dll")] public static extern bool PeekMessage(out MSG msg, IntPtr h, uint min, uint max, uint remove);
+        [DllImport("user32.dll")] public static extern bool TranslateMessage(ref MSG msg);
+        [DllImport("user32.dll")] public static extern IntPtr DispatchMessage(ref MSG msg);
         [DllImport("shell32.dll")] public static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
         [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER id, out RECT rect);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr CreateWindowEx(int exStyle, string cls, string name, int style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);

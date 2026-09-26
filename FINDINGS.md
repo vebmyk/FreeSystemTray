@@ -1,7 +1,126 @@
 # Findings
 
-Phase 1 (production tray host, window and placement) comes first; the Phase 0 feasibility report
-follows unchanged, apart from notes where Phase 1 corrected it.
+Phase 2 (show/hide) comes first, then Phase 1 (production tray host, window and placement). The
+Phase 0 feasibility report follows unchanged, apart from notes where Phase 1 corrected it.
+
+## Phase 2: show/hide
+
+Date: 2026-09-26. Same machine and setup as Phases 0 and 1 (Windows 10 Pro 22H2, build 19045.7725,
+one 1920×1080 monitor at 100%, ManagedShell 0.0.374 on .NET 10). "Show animations in Windows" was
+off at first; you turned it on during testing (finding 5).
+How to use it is in [README.md](README.md), "Showing and hiding".
+
+### Phase 2 verdict
+
+**Show/hide works on Windows 10.** Unit tests (128) and the smoke test (46 checks, 19 of them new)
+pass. Hiding only hides the window: icons added and changed while it is hidden reach both our host
+and Explorer's tray, and while it is hidden Explorer answers the icon-position queries, so menus and
+flyouts open at the taskbar.
+
+One change to the window that later phases inherit: **the tray window is now per-pixel transparent**
+(WPF `AllowsTransparency`), because WPF does not let any other window fade (finding 1). Phase 4 gets
+background opacity and rounded corners from this for free; its blur must be tried on this kind of
+window.
+
+### What Phase 2 built
+
+- `ShowHide/` in the app: the controller (hotkey, hotspot, auto-hide, commands), the auto-hide rules
+  and the tracking of menus and flyouts opened from the tray (pure logic, unit-tested), a watcher
+  thread with a low-level mouse hook and WinEvent hooks, the fade and slide animations, and hotkey
+  parsing.
+- Two modes. **Always visible** (default): the hotkey or the grip menu's Hide hides the tray until
+  the hotkey or the hotspot brings it back. **Auto-hide**: starts hidden; the hotkey or the hotspot
+  shows it; a click elsewhere, a switch to another window, or the pointer being away for the hide
+  delay hides it. A Win32 menu or a popup that opened within 2 s of a click on one of our icons keeps
+  it shown while open. The tray never hides without a working hotkey or a hotspot to bring it back.
+- `--toggle`, `--show`, `--hide` for the running instance; the settings file is reloaded when it
+  changes (the plan's "live reload", for `settings.json`); grip menu items Auto-hide and Hide.
+- `ManagedShellTrayHost`: while the window is hidden, Explorer's answer to an icon-position query
+  stands even when it is a failure (before, an icon Explorer did not know got our window's position).
+- Smoke test: 19 show/hide checks; before every simulated input it waits for 1.5 s without user
+  input (`SpikeTool wait-idle`). SpikeTool also presses any key chord and has a click target of its own.
+
+### Phase 2 results
+
+| Check | Result |
+|---|---|
+| `--hide`, `--show`, `--toggle`, the grip menu's Hide | ✅ Smoke test and by hand. |
+| Icons added and tooltips changed while hidden | ✅ Reach our host and Explorer's tray; the new icon is in place when the tray is shown. |
+| Position queries while hidden, pointer where the tray was | ✅ Explorer answers (S_FALSE for an icon in its closed hidden-icons flyout). |
+| Hotkey `Ctrl+Alt+Shift+T` | ✅ Registered on this machine. A hotkey held by another program is logged as such; auto-hide then refuses to hide (no way back). |
+| Hotspot (left edge in the smoke test; top-left corner by hand) | ✅ Shows the tray after the 300 ms dwell (plus up to 100 ms polling). The pointer at 7,7 shows it, at 20,0 it does not (the corner is 8 px). Shown by the hotspot, it hides the hide delay after the pointer leaves the hotspot. |
+| Timer | ✅ Hides after the delay plus up to 200 ms (the check interval) and the animation: measured 1.5 s from outside the app for a 1 s delay and a 150 ms slide. Shown by the hotkey, it waited until the pointer had been over the tray. |
+| Click-away and switch-away | ✅ A click on another process's window (low-level mouse hook) and a foreground change to another window both hide it. |
+| A menu opened from our tray | ✅ TestTrayApp's Win32 menu opened 120 ms after the right-click, was recognised (`EVENT_SYSTEM_MENUPOPUPSTART`), and kept the tray shown for 3 s with the pointer away; the tray hid after the delay once Esc closed it. |
+| Windows 10's volume flyout opened from our tray | ✅ Took the foreground 160 ms after the click and kept the tray shown for 2.5 s with the pointer away. Closing it with Esc hands the foreground to Explorer's taskbar, which counts as a switch away: the tray hid at once (finding 2). |
+| Fade and slide | ✅ Screen samples at a 2 s duration show the fade's intermediate colours and the slide's edge moving; icon positions are correct afterwards. |
+| Settings file edited while running | ✅ Applied after a 0.3 s pause for further writes; the app's own saves are ignored; a half-written file keeps the current settings. |
+| Auto-hide on, but no hotkey and no hotspot | ✅ Stays visible, logs why, refuses `--hide`; removing the hotspot while hidden shows the tray. |
+
+### Phase 2 findings
+
+1. **WPF strips `WS_EX_LAYERED` from windows without `AllowsTransparency`.** The first fade used
+   `SetLayeredWindowAttributes` on the normal (DirectX-drawn) tray window. The style never stuck: set
+   from inside the app or from another process, `GetWindowLong` showed no `WS_EX_LAYERED` right after,
+   and the alpha calls failed. WPF enforces that a window is layered exactly when it was created with
+   `AllowsTransparency`. So the tray window is now created with `AllowsTransparency="True"` and a
+   transparent window background, and the content draws the background. The fade animates the content's
+   opacity; the slide moves the content, and the window clips what moves outside it, so it needs no
+   window region and never passes over other windows or monitors. Rendering, clicks, menus and the
+   smoke test are unchanged.
+2. **Closing a Windows 10 flyout gives the foreground to Explorer's taskbar.** The volume flyout is a
+   `Windows.UI.Core.CoreWindow` of ShellExperienceHost that takes the foreground when it opens. When it
+   closes (Esc, or a click elsewhere), the foreground goes to Explorer's `Shell_TrayWnd`, so an
+   auto-hiding tray with click-away on hides at once rather than after the delay. That seems right
+   (the interaction is over), but it is a choice.
+3. **What keeps the tray shown.** Apps' Win32 menus are seen from any process through
+   `EVENT_SYSTEM_MENUPOPUPSTART`/`END`, and flyouts through the foreground change they cause. Both
+   count only when they start within 2 s of a click on one of our icons. A flyout counts while it is
+   in the foreground and is a visible, always-on-top window; this keeps an ordinary app window opened
+   by a click (Discord's main window, say) from holding the tray open. Menus that are not Win32 menus
+   (Electron, Qt) are only covered if they take the foreground; not tested with a real app.
+4. **A process's first window, created visible, takes the foreground even with `WS_EX_NOACTIVATE`.**
+   Seen with SpikeTool's first click target: the tray hid on that foreground change, before the click.
+   The target is now created hidden and shown with `SW_SHOWNOACTIVATE`, so the check exercises the
+   click itself. For users this means an app that pops up a window also hides an auto-hiding tray.
+5. **Animations follow "Show animations in Windows".** The setting was off when testing began, so
+   show/hide was instant, as designed (together with finding 1, this first made the fade look
+   broken). You turned it on during testing, and the animation results above were taken with it on.
+   The app logs the animation it will use at startup ("Show/hide: ..., animation ...").
+
+### Open points
+
+- **Full-screen apps.** In always-visible mode the tray is an always-on-top window, so it should stay
+  above full-screen videos and borderless games, where Explorer's taskbar steps back (Phase 1,
+  finding 6). Not tested; the hotspot at least does not fire over a full-screen window. Decided
+  2026-09-26 (PLAN.md, "Decisions"): drop the tray's always-on-top flag while a full-screen app is in
+  front on its monitor. Not built yet.
+- **Hiding under the pointer.** If the hotkey hides the tray while the pointer is on an icon, that
+  app does not get the mouse-leave (`NIN_POPUPCLOSE` for version 4 icons) until the pointer moves
+  over the tray again.
+
+### Not tested in Phase 2
+
+- Multiple monitors and mixed DPI (the hotspot is on the tray's monitor; the zone maths is unit-tested
+  with an offset monitor at 150%).
+- Keyboard focus in the tray, touch and pen.
+- Auto-hide with a real app's non-Win32 menu (Discord, Qt apps), and the network and power flyouts.
+- A long run in auto-hide mode.
+- Windows 11.
+
+### Phase 2: side effects on this machine
+
+- Simulated input, always after at least 1.5 s without user input: the pointer moved to the left
+  screen edge, the top-left corner and elsewhere; `Ctrl+Alt+Shift+T` (taken by the tray while it ran)
+  and Esc pressed; right-clicks on test icons and their menus closed with Esc; the grip menu opened
+  and used with its access keys; clicks on SpikeTool's own target window; the volume flyout opened
+  from the tray and closed with Esc (volume unchanged).
+- Windows' notification icon history has two more "TestTrayApp" entries (P2Hidden, SmokeD), and Action
+  Center one more "Balloon from SmokeA" notification per smoke-test run.
+- `Ctrl+Alt+Shift+T` was registered by a PowerShell session for a few seconds to test a taken hotkey,
+  then released.
+- No Explorer restarts. All runs used settings and logs in temporary folders;
+  `%LOCALAPPDATA%\FreeSystemTray` still does not exist. Explorer is the tray host, always-on-top.
 
 ## Phase 1: production tray host
 

@@ -32,6 +32,8 @@ Verified in Phase 0 and Phase 1 on Windows 10 22H2 unless marked otherwise. Deta
 - Built-in icons on Windows 10: volume, network, power, Windows Update, Windows Security and Bluetooth arrive as ordinary tray icons, and their flyouts open next to our window. The clock and Action Center are part of Explorer's taskbar, not tray icons; Action Center opens with `ms-actioncenter:`.
 - `NIM_ADD` carries the calling app's executable path, which shell32 writes relative to a known folder (`{FOLDERID}\rest`) under Windows, System32 and Program Files. Explorer ties a GUID icon to that string, so an add we build for Explorer must carry it in the same form (Phase 1).
 - Windows 10's own flyouts (network, volume, power) ignore the taskbar edge the host reports: they center on the tray or the icon and are then pushed inside the work area, so they overlap a free-floating window (Phase 1).
+- WPF lets a window be layered (and so fade or be see-through) only if it is created with `AllowsTransparency`; it strips `WS_EX_LAYERED` from any other window. The tray window is created that way (Phase 2).
+- Closing a Windows 10 flyout gives the foreground to Explorer's taskbar (Phase 2).
 - Icon images: each app hands over one `HICON`, usually 16 px at 100% scaling (some apps send 32 or 48 px). There is no larger version to ask for.
 - Reference implementations for the message formats: RetroBar, Cairo Desktop, ReactOS `explorer` (systray), Wine `explorer/systray.c`.
 
@@ -44,9 +46,10 @@ Verified in Phase 0 and Phase 1 on Windows 10 22H2 unless marked otherwise. Deta
   - **Auto-hide queries:** forward `ABM_GETSTATE` and `ABM_GETAUTOHIDEBAR(EX)` to Explorer, so apps see Explorer's real auto-hide setting.
   - **Position queries:** answer icon- and taskbar-position queries with our window only for interactions that start in it (the cursor is on it, or it was clicked within 5 s); otherwise Explorer answers. Explorer's questions about its own taskbar and its hidden-icons chevron always get Explorer's answer.
   - **Threading:** apply ManagedShell's changes to the UI with `Dispatcher.BeginInvoke`, and never wait on anything inside its event handlers. Compare icons by object reference, not with `NotifyIcon.Equals`. Subclass ManagedShell's window as it is created (a `WH_CBT` hook), because tray messages arrive during its startup.
-- **Window layer:** one borderless, topmost, non-activating tool window (`WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`), so it does not steal focus or appear in Alt+Tab. Phase 0 confirmed that apps' context menus and our tooltips work from such a window.
-- **Settings layer:** JSON config plus theme files. Live reload.
-- **Shell integration:** global hotkey, single-instance mutex, autostart, Explorer-restart handling, and a small watchdog process that broadcasts `TaskbarCreated` if the app dies (the single-instance mutex and the watchdog were built in Phase 1).
+- **Window layer:** one borderless, topmost, non-activating tool window (`WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`), so it does not steal focus or appear in Alt+Tab. Phase 0 confirmed that apps' context menus and our tooltips work from such a window. Since Phase 2 it is per-pixel transparent (`AllowsTransparency`) and its content draws the background; show/hide animates the content.
+- **Show/hide:** a controller on the UI thread (hotkey, hotspot, auto-hide, commands from `--toggle`, `--show`, `--hide`). The system-wide hooks it needs while an auto-hiding tray is shown (a low-level mouse hook, foreground and menu WinEvents) run on a thread of their own and only pass events on, so they never wait on the tray thread.
+- **Settings layer:** JSON config plus theme files. Live reload (built for `settings.json` in Phase 2).
+- **Shell integration:** global hotkey, single-instance mutex, autostart, Explorer-restart handling, and a small watchdog process that broadcasts `TaskbarCreated` if the app dies (the single-instance mutex and the watchdog were built in Phase 1, the hotkey in Phase 2).
 
 ## Phases
 
@@ -65,10 +68,13 @@ Done on 2026-09-25 and 26 on Windows 10 22H2 (build 19045.7725). Results are in 
 - Not tested: multiple monitors and mixed DPI (one monitor; the placement rules are unit-tested with two).
 - Free-standing floating window first. An AppBar mode that reserves screen space is an optional later addition, and the fix for the flyout overlap when the tray is docked.
 
-### Phase 2: Show/hide
-- Global hotkey (configurable), hotspot at a screen edge or corner, click-away and timed auto-hide, fade or slide animations, and an always-visible mode.
-- Hidden means the window is hidden, not that the tray host role is dropped; icons must keep registering while hidden.
-- While hidden, let Explorer answer icon-position queries, so menus and flyouts open at the taskbar (`ITrayHost.TrayWindowVisible` exists for this).
+### Phase 2: Show/hide (done)
+Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDINGS.md` (Phase 2); usage and settings are in `README.md`.
+- Built: a configurable global hotkey, a hotspot at a screen edge or corner of the tray's monitor, click-away (including switching to another window) and timed auto-hide, fade and slide animations (off when "Show animations in Windows" is off), and an always-visible mode (the default). A menu or flyout opened from one of the tray's icons keeps an auto-hiding tray shown. Also `--toggle`, `--show`, `--hide`, and live reload of `settings.json`.
+- Hidden means only the window is hidden: icons keep registering (smoke-tested), and while hidden Explorer answers icon-position queries, so menus and flyouts open at the taskbar.
+- Not as planned: fading needed the window to be per-pixel transparent (`AllowsTransparency`), which WPF allows only from creation. The window is now always that kind of window; see Phase 4.
+- **Decided, not built yet:** in always-visible mode the tray is an always-on-top window and should stay above full-screen videos and games, where Explorer's taskbar steps back (not tested). Drop the always-on-top flag while a full-screen app is in front on the tray's monitor, as Explorer does (see "Decisions"). The hotspot already ignores full-screen apps.
+- Not tested: multiple monitors and mixed DPI, non-Win32 menus of real apps (Discord, Qt apps) with auto-hide, a long run in auto-hide mode.
 
 ### Phase 3: Scaling
 - Two independent settings: icon size and window/padding scale. Each accepts any value, as pixels or as a percentage of a base size (for example 167%). No preset steps and no upper or lower clamp beyond sanity limits.
@@ -82,6 +88,7 @@ Done on 2026-09-25 and 26 on Windows 10 22H2 (build 19045.7725). Results are in 
 ### Phase 4: Appearance and themes
 - Data-driven WPF templates: background color/opacity, blur/acrylic, corner radius, border, icon spacing, orientation (row, column, grid with N columns), hover/pressed effects, tooltip styling.
 - Blur on Windows 10 uses the undocumented `SetWindowCompositionAttribute`, with a solid-color fallback. On Windows 11 prefer the official `DWMWA_SYSTEMBACKDROP_TYPE` (Mica/acrylic) and account for system-rounded corners.
+- The window is already per-pixel transparent (Phase 2), so background opacity and corner radius only need the content to draw them. Test the blur on this kind of window (layered, drawn by WPF), and keep the show/hide animations working with it.
 - Themes as JSON, plus optional XAML resource dictionaries for advanced users. Import/export and live preview.
 
 ### Phase 5: Management features
@@ -122,13 +129,14 @@ Done on 2026-09-25 and 26 on Windows 10 22H2 (build 19045.7725). Results are in 
 ## Decisions
 - 2026-09-25: Keep Explorer's taskbar and tray as they are. Our tray is additive, and mirroring keeps Explorer's tray correct. Users who don't want every icon shown twice can use Windows' own settings: move icons to the hidden-icons area, or auto-hide the taskbar.
 - 2026-09-25: Use ManagedShell unmodified from NuGet, with no fork. Workarounds stay small and inside the `ITrayHost` implementation. Offering them upstream (for example a "forward handled messages" option) is optional; if one is accepted, delete our workaround.
+- 2026-09-26: While a full-screen app (video, game, slide show) is in front on the tray's monitor, the always-visible tray drops its always-on-top flag, as Explorer's taskbar does, and gets it back afterwards. Not built yet.
 
 ## Deliverables
 Source repo with a README, build instructions, a sample theme set, `FINDINGS.md` from Phase 0 (done), the smoke test (`tests/smoke`, built on the Phase 0 test app and harness in `spike/`), and a short test checklist of the apps tested in Phase 0 (in `FINDINGS.md`) and Phase 6.
 
 ## Instructions to the implementer
-- Phases 0 and 1 are done (`FINDINGS.md`). Wait for approval before starting Phase 2.
+- Phases 0, 1 and 2 are done (`FINDINGS.md`). Wait for approval before starting Phase 3.
 - Have real tray apps running during testing, and state which Windows version and build you are testing on.
-- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture. Run the smoke test (`tests/smoke`) after changes to the tray host and before every ManagedShell upgrade.
+- Use ManagedShell for the tray host. Our own `WM_COPYDATA` handling is limited to the workarounds under Architecture. Run the smoke test (`tests/smoke`) after changes to the tray host or to show/hide, and before every ManagedShell upgrade.
 - Keep tray host logic behind `ITrayHost` and separate from the UI.
 - Explorer's tray must keep working while our app runs, after it exits, and after it crashes.
