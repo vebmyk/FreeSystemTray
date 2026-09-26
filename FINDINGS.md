@@ -1,8 +1,161 @@
 # Findings
 
-The newest phase comes first: Phase 4 (appearance and themes), Phase 3 (scaling), Phase 2
-(show/hide), Phase 1 (production tray host, window and placement). The Phase 0 feasibility report
-follows unchanged, apart from notes where Phase 1 corrected it.
+The newest phase comes first: Phase 5 (management), Phase 4 (appearance and themes), Phase 3
+(scaling), Phase 2 (show/hide), Phase 1 (production tray host, window and placement). The Phase 0
+feasibility report follows unchanged, apart from notes where Phase 1 corrected it.
+
+## Phase 5: management features
+
+Date: 2026-09-26. Same machine and setup as before (Windows 10 Pro 22H2, build 19045.7725, one
+1920×1080 monitor at 100%, ManagedShell 0.0.374 on .NET 10). Real tray apps running: PowerToys (and
+Awake), Command Palette, Launchy, Directory Opus, Listary, Google Drive, Windows Security, Bluetooth,
+battery, network, volume. How to use the new features is in [README.md](README.md) ("Arranging
+icons", and the list at the top).
+
+### Phase 5 verdict
+
+**Management works.** Unit tests (266) and the smoke test (86 checks, 18 of them new) pass. By hand,
+with screenshots: the hidden-icons flyout, the "as in Windows" default, dragging icons (also a real
+app's, Listary), the Shift+right-click menu, and the settings window's four tabs, including changing
+an icon's rule, renaming and moving an icon, and capturing a hotkey.
+
+Two things were checked only in part, because the full check changes this machine:
+
+- **Meet Now itself.** Explorer registers it with the tray host only when Explorer restarts, and I
+  did not restart Explorer this time. The mechanism was checked by making Explorer alone hide a test
+  icon, which is what Windows does with Meet Now (finding 2). How to see the real case is under
+  [Checking Meet Now](#checking-meet-now).
+- **Autostart.** Tested against a registry key of the tests' own; your Run key was not changed. See
+  [Checking autostart](#checking-autostart).
+
+### What Phase 5 built
+
+- **Icon rules** in `settings.json`: per icon (or per exe) a placement (the tray, the hidden-icons
+  flyout, or nowhere), a name and a replacement tooltip (`{tip}` for the app's own); the most exact
+  rule wins per value. A saved order, kept for apps that are not running. A default placement for
+  icons without a rule (`Tray`, `Overflow`, or `Windows`: as Explorer has them), a limit on the icons
+  in the tray (the rest spill into the flyout), and hiding the icons Windows hides. Icons are named
+  by their GUID or by "exe:uID", not by full path, which changes with every update of apps that
+  install into versioned folders. The arrangement is pure logic (`Icons/`), unit-tested.
+- **Where Explorer shows each icon:** `ExplorerTrayIcons` reads Explorer's three toolbars (taskbar,
+  system-promoted, flyout) from Explorer's memory, the way ManagedShell's import does, on a
+  thread-pool thread, 300 ms after our icons change and every 3 s. `ITrayIcon.ExplorerPlacement` is
+  Taskbar, Overflow, Hidden, or Unknown (Windows 11 has no such toolbars).
+- **The hidden-icons flyout** (`OverflowWindow`): a chevron at the end of the tray opens it, next to
+  the tray on the side away from the nearest screen edge, not past the tray's ends. It is a
+  non-activating tool window like the tray; it closes on a click elsewhere or a switch to another
+  window (except in a menu or flyout an icon opened, the rule auto-hide uses), and when the tray hides
+  or is moved. The pointer on it counts as on the tray for position queries
+  (`ITrayHost.SetOverflowBounds`), and it takes the theme's blur.
+- **Dragging icons** (`IconDrag`): a left-button drag moves an icon instead of clicking it: over
+  another icon it takes that place, onto the chevron it goes into the flyout (which opens), and back.
+  Icons move while dragging (a preview of the settings the drop saves). The app hears no click.
+- **Shift+right-click** on an icon opens the tray's own menu for it: automatic, always in the tray,
+  in the hidden icons, hidden, and its name and tooltip (the settings window).
+- **The settings window**: Icons (every icon with its rule and where it is, name, tooltip, move
+  up/down, forget; the defaults), Appearance (theme, sizes, snapping, scaling), Show and hide (a
+  hotkey captured from the keyboard, auto-hide, hotspot, animation), General (autostart, the app's
+  own icon, position, files). Changes apply and save at once; edits elsewhere show up in it.
+- **FreeSystemTray's own icon** (drawn by `tools/Make-AppIcon.ps1`, also the exe's icon), registered
+  with `Shell_NotifyIcon` like any app's, so it shows in the tray and, mirrored, in Explorer's: a
+  left-click opens the settings, a right-click the app menu, which the grip now shares. The menu offers
+  "Show the tray" when it is hidden.
+- **Autostart**: the user's Run key, read together with Task Manager's StartupApproved key (an entry
+  Task Manager turned off is off; ticking the box turns it back on). `--autostart` waits for
+  Explorer's taskbar at sign-in.
+- **Single instance**: starting the exe again, or `--open-settings`, shows the running tray and its
+  settings.
+- **Watchdog**: after a crash it also removes the icons of windows that no longer exist from
+  Explorer's tray (FreeSystemTray's own).
+- Themes: `foreground`, the chevron's colour (dark on Light).
+- Smoke test: 18 checks. SpikeTool: `explorer-hide` (Explorer alone hides or shows an icon) and
+  `click X Y KIND shift`.
+- **Not built:** balloon notifications in our own style (optional in the plan; Windows shows them
+  as notifications through mirroring), and fitting the tray to its monitor automatically (the
+  icon limit does it by hand).
+
+### Phase 5 results
+
+| Check | Result |
+|---|---|
+| Rules from the settings file (flyout, hidden, tooltip, order, limit) | ✅ Applied within about 0.3 s. A hidden icon keeps registering: its tooltip changes reach our host and Explorer's tray. |
+| Default "as in Windows" | ✅ Battery, network and volume in the tray (plus an icon with a tray rule), the other 10 in the flyout: Explorer's layout. |
+| An icon Windows hides (simulated: Explorer alone hides a test icon) | ✅ Hidden 1.9 s later, back 2.9 s after Explorer showed it again (the 3 s read). Explorer's tray reads as 16 buttons, 1 hidden: Meet Now. |
+| Flyout | ✅ Opens above the chevron, flush with the tray's right end. A click on an icon in it reaches the app (`NIN_SELECT`, told the icon's rectangle in the flyout); a click elsewhere closes it; the chevron toggles it. |
+| Dragging | ✅ To the front of the tray, onto the chevron (the flyout opens meanwhile, and closes when the icon is dropped on the chevron), out of the flyout into the tray. Order and rules saved; the apps saw only pointer moves. |
+| Shift+right-click | ✅ The tray's menu; the app gets no right-click. |
+| Settings window | ✅ All four tabs; a rule changed in the list moves the icon and re-sorts the list; a name typed and Enter; move down; hotkey Ctrl+Alt+Shift+Y captured and registered, then T again. |
+| FreeSystemTray's own icon | ✅ In the tray and Explorer's; gone from Explorer's after an exit; after a kill the watchdog removed it ("removed 1 icon of windows that no longer exist"). |
+| Starting the exe again | ✅ Exit code 0; the running instance showed its settings. |
+| Autostart | ✅ Unit tests on a test key: on, off, turned off in Task Manager and back on, the command line. Not on the real Run key. |
+
+### Phase 5 findings
+
+1. **Explorer keeps a hidden button for icons it hides.** Meet Now (turned off on this machine) is
+   registered by explorer.exe (GUID `7820ae83-…`) and sits in Explorer's flyout toolbar with the
+   toolbar's hidden state. That state is the only general sign of "Windows hides this icon" I found,
+   so the tray reads it. ManagedShell's import reads the same bit, but only for the icons it imports
+   at start; when Explorer registers Meet Now again after a restart, it arrives without a hidden state
+   (Phase 0 logs: `hidden=False`), which is why Phase 0 showed it.
+2. **Explorer can hide an icon that the tray host shows.** `NIM_MODIFY` with `NIS_HIDDEN`, sent to
+   Explorer's tray alone, hides its button while the host's copy stays visible. The smoke test uses
+   this (`SpikeTool explorer-hide`) to stand in for Meet Now.
+3. **An app can register its tray icon with itself as the host.** FreeSystemTray's own icon goes to
+   the highest `Shell_TrayWnd`, its own (on the same thread, so it is handled at once), and is
+   mirrored like any other. After a crash, Explorer's copy belongs to a window that no longer exists;
+   Explorer drops such icons only when the pointer passes over them. `NIM_DELETE` with the dead
+   window's handle and uID removes it, so the watchdog does that.
+4. **The diagnostics writer could crash the app.** Replacing `state.json` fails with "access denied"
+   (not an `IOException`) while a reader has the file open; the smoke test hit this once. Fixed; it
+   only affected `--diag`.
+5. **Dragging into a tray anchored at the right moves the target.** An icon dragged in from the
+   flyout makes the tray one cell longer to the left, so the icons under the pointer shift by one
+   cell during the drag. The icon lands where the pointer ends, which matches the screen but can be a
+   place further than the icon first aimed at.
+6. **Some keys have two names** (`OemTilde` and `Oem3`, `PageDown` and `Next`); the settings window
+   writes the readable one.
+
+### Checking Meet Now
+
+Not done by me, because it needs an Explorer restart:
+
+1. Keep Meet Now turned off (Settings › Personalization › Taskbar › Turn system icons on or off).
+2. Start FreeSystemTray, then restart Explorer (Task Manager › Windows Explorer › Restart) with no
+   folder windows open.
+3. Expected: Meet Now is not in the tray; the settings window's Icons tab lists it as "hidden
+   (Windows hides it)". Before Phase 5 it appeared (Phase 0).
+
+### Checking autostart
+
+1. Settings › General › tick "Start FreeSystemTray when I sign in". Task Manager's Startup tab lists
+   FreeSystemTray, enabled.
+2. Sign out and in: the tray appears; its log says "Started at sign-in".
+3. Untick the box to remove the entry.
+
+### Not tested in Phase 5
+
+- Meet Now itself and autostart at a real sign-in (above).
+- Multiple monitors and mixed DPI for the flyout, dragging and the settings window.
+- Windows 11: Explorer's tray has no toolbars to read there, so where Explorer shows an icon is
+  unknown, `Windows` places icons like `Tray`, and icons Windows hides are not recognised.
+- Apps whose uID changes from run to run: their "exe:uID" rules would not match again (a rule for the
+  exe name would).
+- Keyboard use of the tray and the flyout; touch.
+
+### Phase 5: side effects on this machine
+
+- Screenshots of the tray, the flyout, the menus and the settings window are in a temporary folder.
+- Simulated input, after 1.5 s without yours: clicks on the chevron and on icons in the flyout, drags
+  of test icons and of Listary (in a temporary settings file; Listary is unchanged), Shift+right-clicks,
+  and keys typed into the settings window (the name "Alfa"; Ctrl+Alt+Shift+Y as the hotkey for a
+  moment, then T again). Smoke-test runs as before.
+- The settings window opened in front of your work a few times, and took the keyboard focus.
+- Explorer was told to hide a test icon for a few seconds, twice, and to show it again.
+- The unit tests created and deleted `HKCU\Software\FreeSystemTray.Tests`. The Run and
+  StartupApproved keys were not changed: there is no FreeSystemTray entry.
+- Windows' notification icon history has a "FreeSystemTray" entry and more "TestTrayApp" ones.
+- No Explorer restarts. All runs used settings and logs in temporary folders;
+  `%LOCALAPPDATA%\FreeSystemTray` still does not exist. Explorer is the tray host, always-on-top.
 
 ## Phase 4: appearance and themes
 
