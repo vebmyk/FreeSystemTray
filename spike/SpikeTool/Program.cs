@@ -13,6 +13,14 @@ namespace SpikeTool
     ///   explorer-icons            list icons in Explorer's own tray toolbars (promoted + overflow)
     ///   traywnds                  list Shell_TrayWnd windows in Z-order (the first one receives Shell_NotifyIcon)
     ///   windows [filter]          list visible top-level windows (menus, flyouts, ...)
+    ///   watch-zorder MS           for MS milliseconds, print (with the time) each change of the highest
+    ///                             Shell_TrayWnd (the tray host; polled every 2 ms) and the WinEvents that
+    ///                             could announce it: EVENT_OBJECT_REORDER, foreground changes, and
+    ///                             Shell_TrayWnd windows created, shown or destroyed
+    ///   raise-explorer [MS]       put Explorer's taskbar above every other Shell_TrayWnd (it takes the
+    ///                             tray host role), and keep it there for MS milliseconds (default: once)
+    ///   watch-tooltips MS         for MS milliseconds, print (with the time) every tooltip window that
+    ///                             appears, moves or disappears, with its text and owner process
     ///   fg                        show the foreground window
     ///   click X Y [left|right|middle|double] [shift]   with shift, Shift is held during the click
     ///   move X Y                  move the cursor (hover)
@@ -43,6 +51,10 @@ namespace SpikeTool
     ///                             with a placeholder icon and the given exe path in shell32's field
     ///   explorer-hide HWND UID on|off  NIM_MODIFY with NIS_HIDDEN set or cleared, sent to Explorer's tray
     ///                             only: Explorer hides the icon, the tray host's copy stays visible
+    ///   explorer-tip HWND UID "TIP"   NIM_MODIFY of the tooltip, sent to Explorer's tray only
+    ///   explorer-... raise        any of the explorer-add/delete/hide/tip commands followed by "raise":
+    ///                             then put Explorer's taskbar above the tray host's for a moment, as if
+    ///                             the message had arrived while Explorer held the tray host role
     ///   explorer-tray             Explorer's taskbar child windows (tray area, chevron, clock) with rects
     /// </summary>
     internal static class Program
@@ -54,11 +66,20 @@ namespace SpikeTool
             if (args.Length == 0) { Console.WriteLine("usage: see source"); return 1; }
             try
             {
+                if (args.Length > 1 && args[0].StartsWith("explorer-", StringComparison.OrdinalIgnoreCase) && args[^1] == "raise")
+                {
+                    int code = Main(args[..^1]);
+                    RaiseExplorer(0);
+                    return code;
+                }
                 switch (args[0].ToLowerInvariant())
                 {
                     case "explorer-icons": ExplorerIcons(); break;
                     case "traywnds": TrayWnds(); break;
                     case "windows": Windows(args.Length > 1 ? args[1] : null); break;
+                    case "watch-tooltips": WatchTooltips(I(args[1])); break;
+                    case "watch-zorder": WatchZOrder(I(args[1])); break;
+                    case "raise-explorer": RaiseExplorer(args.Length > 1 ? I(args[1]) : 0); break;
                     case "fg": Foreground(); break;
                     case "click":
                         // "shift" after the kind holds Shift down during the click.
@@ -102,6 +123,7 @@ namespace SpikeTool
                     case "explorer-delete": ExplorerDelete(args); break;
                     case "explorer-add": ExplorerAdd(args); break;
                     case "explorer-hide": ExplorerHide(args); break;
+                    case "explorer-tip": ExplorerTip(args); break;
                     case "explorer-tray": ExplorerTray(); break;
                     default: Console.WriteLine("unknown command"); return 1;
                 }
@@ -192,7 +214,7 @@ namespace SpikeTool
                     var td = Read<TRAYDATA>(hp, tb.dwData);
                     W.GetWindowThreadProcessId(td.hWnd, out uint owner);
                     string guid = td.guidItem == Guid.Empty ? "" : $" guid={td.guidItem}";
-                    Console.WriteLine($"  #{i}{(hidden ? " HIDDEN" : "")} '{Clean(td.szIconText)}' owner={Proc(owner)}({owner}) hwnd=0x{td.hWnd.ToInt64():X} alive={W.IsWindow(td.hWnd)} uid={td.uID} ver={td.uVersion} cb=0x{td.uCallbackMessage:X}{guid}{rect}");
+                    Console.WriteLine($"  #{i}{(hidden ? " HIDDEN" : "")} '{Clean(td.szIconText)}' owner={Proc(owner)}({owner}) hwnd=0x{td.hWnd.ToInt64():X} alive={W.IsWindow(td.hWnd)} uid={td.uID} ver={td.uVersion} cb=0x{td.uCallbackMessage:X} state=0x{td.dwState:X} pref={td.dwUserPref} hicon=0x{td.hIcon.ToInt64():X}{guid}{rect}");
                 }
             }
             finally
@@ -286,6 +308,102 @@ namespace SpikeTool
                     Console.WriteLine(line);
                 return true;
             }, IntPtr.Zero);
+        }
+
+        private static string Describe2(IntPtr h)
+        {
+            if (h == IntPtr.Zero) return "0";
+            W.GetWindowThreadProcessId(h, out uint pid);
+            return $"0x{h.ToInt64():X} [{Cls(h)}] {Proc(pid)}";
+        }
+
+        private static void WatchZOrder(int ms)
+        {
+            var watch = Stopwatch.StartNew();
+            IntPtr host = W.FindWindow("Shell_TrayWnd", null);
+            Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} HOST {Describe2(host)}");
+            W.WinEventProc proc = (hook, evt, hwnd, idObject, idChild, thread, time) =>
+            {
+                string cls = hwnd == IntPtr.Zero ? "" : Cls(hwnd);
+                bool tray = cls is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd";
+                string what = evt switch
+                {
+                    0x0003 => "FOREGROUND",
+                    0x8004 => "REORDER",
+                    0x8000 => tray && idObject == 0 ? "CREATE" : null,
+                    0x8001 => tray && idObject == 0 ? "DESTROY" : null,
+                    0x8002 => tray && idObject == 0 ? "SHOW" : null,
+                    _ => null
+                } ?? "";
+                if (what == "") return;
+                if (evt == 0x8004 && idObject != 0) what += $" obj={idObject}";
+                Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} EVENT {what} {Describe2(hwnd)} (top host now {Describe2(W.FindWindow("Shell_TrayWnd", null))})");
+            };
+            IntPtr h1 = W.SetWinEventHook(0x0003, 0x0003, IntPtr.Zero, proc, 0, 0, 0x0002);
+            IntPtr h2 = W.SetWinEventHook(0x8000, 0x8004, IntPtr.Zero, proc, 0, 0, 0x0002);
+            try
+            {
+                while (watch.ElapsedMilliseconds < ms)
+                {
+                    while (W.PeekMessage(out W.MSG msg, IntPtr.Zero, 0, 0, 1))
+                    {
+                        W.TranslateMessage(ref msg);
+                        W.DispatchMessage(ref msg);
+                    }
+                    IntPtr now = W.FindWindow("Shell_TrayWnd", null);
+                    if (now != host)
+                    {
+                        Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} HOST {Describe2(now)}");
+                        host = now;
+                    }
+                    Thread.Sleep(2);
+                }
+            }
+            finally
+            {
+                W.UnhookWinEvent(h1);
+                W.UnhookWinEvent(h2);
+                GC.KeepAlive(proc);
+            }
+        }
+
+        private static void RaiseExplorer(int ms)
+        {
+            IntPtr explorer = ExplorerTrayWnd();
+            var watch = Stopwatch.StartNew();
+            do
+            {
+                W.SetWindowPos(explorer, new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 /* NOSIZE|NOMOVE|NOACTIVATE */);
+                Thread.Sleep(1);
+            } while (watch.ElapsedMilliseconds < ms);
+            Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} raised Explorer's taskbar {Describe2(explorer)}; host now {Describe2(W.FindWindow("Shell_TrayWnd", null))}");
+        }
+
+        /// <summary>Polls every 20 ms for visible tooltips_class32 windows and prints each change.</summary>
+        private static void WatchTooltips(int ms)
+        {
+            var shown = new Dictionary<IntPtr, string>();
+            var watch = Stopwatch.StartNew();
+            while (watch.ElapsedMilliseconds < ms)
+            {
+                var now = new Dictionary<IntPtr, string>();
+                W.EnumWindows((h, _) =>
+                {
+                    if (Cls(h) != "tooltips_class32" || !W.IsWindowVisible(h)) return true;
+                    W.GetWindowRect(h, out var r);
+                    W.GetWindowThreadProcessId(h, out uint pid);
+                    var sb = new StringBuilder(512);
+                    W.SendMessageTimeout(h, 0x000D /* WM_GETTEXT */, (IntPtr)sb.Capacity, sb, 2, 200, out _);
+                    now[h] = $"0x{h.ToInt64():X} {Proc(pid)} '{Clean(sb.ToString())}' rect=[{r.Left},{r.Top},{r.Right - r.Left},{r.Bottom - r.Top}]";
+                    return true;
+                }, IntPtr.Zero);
+                foreach (var (h, text) in now)
+                    if (!shown.TryGetValue(h, out string? before) || before != text) Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} TOOLTIP {text}");
+                foreach (var h in shown.Keys)
+                    if (!now.ContainsKey(h)) Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} TOOLTIP GONE 0x{h.ToInt64():X}");
+                shown = now;
+                Thread.Sleep(20);
+            }
         }
 
         private static void Foreground()
@@ -769,6 +887,23 @@ namespace SpikeTool
             Console.WriteLine($"NIM_DELETE to Explorer's taskbar {Describe(explorer)} -> {SendCopyData(explorer, 1, payload, new IntPtr(hwnd))}");
         }
 
+        private static void ExplorerTip(string[] a)
+        {
+            IntPtr explorer = ExplorerTrayWnd();
+            if (explorer == IntPtr.Zero) { Console.WriteLine("Explorer's taskbar not found"); return; }
+            var payload = new byte[1484];
+            uint hwnd = (uint)Convert.ToInt64(a[1], 16);
+            BitConverter.GetBytes(0x34753423u).CopyTo(payload, 0);   // signature
+            BitConverter.GetBytes(1u).CopyTo(payload, 4);            // NIM_MODIFY
+            BitConverter.GetBytes(956).CopyTo(payload, 8);           // cbSize
+            BitConverter.GetBytes(hwnd).CopyTo(payload, 12);
+            BitConverter.GetBytes(uint.Parse(a[2], CultureInfo.InvariantCulture)).CopyTo(payload, 16);
+            BitConverter.GetBytes(0x04u).CopyTo(payload, 20);        // NIF_TIP
+            byte[] tip = Encoding.Unicode.GetBytes(a[3]);
+            Array.Copy(tip, 0, payload, 32, Math.Min(tip.Length, 254));
+            Console.WriteLine($"NIM_MODIFY tip '{a[3]}' to Explorer's taskbar -> {SendCopyData(explorer, 1, payload, new IntPtr(hwnd))}");
+        }
+
         /// <summary>
         /// NIM_MODIFY with NIS_HIDDEN set or cleared, sent only to Explorer's taskbar: Explorer hides
         /// (or shows) the icon while the tray host's copy stays as the app registered it, as Windows
@@ -938,6 +1073,9 @@ namespace SpikeTool
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
         [DllImport("user32.dll")] public static extern bool PeekMessage(out MSG msg, IntPtr h, uint min, uint max, uint remove);
         [DllImport("user32.dll")] public static extern bool TranslateMessage(ref MSG msg);
+        public delegate void WinEventProc(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+        [DllImport("user32.dll")] public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventProc proc, uint pid, uint tid, uint flags);
+        [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hook);
         [DllImport("user32.dll")] public static extern IntPtr DispatchMessage(ref MSG msg);
         [DllImport("shell32.dll")] public static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
         [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER id, out RECT rect);
@@ -952,6 +1090,7 @@ namespace SpikeTool
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string? name);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
         [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr h, int msg, IntPtr w, StringBuilder l, uint flags, uint timeout, out IntPtr result);
         [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
         [DllImport("user32.dll")] public static extern bool SendNotifyMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int RegisterWindowMessage(string s);

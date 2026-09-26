@@ -28,6 +28,13 @@
       taking Esc (the grip's, FreeSystemTray's icon's, Shift+right-click's in the tray and the
       flyout); the settings
       window (--open-settings, and starting the exe a second time);
+    - robustness (Phase 6): Explorer's icons imported without changing the order of its hidden icons,
+      also an app that ignores TaskbarCreated and has two icons; the tray host role taken back at once
+      when Explorer's taskbar goes above ours, and icon changes that reached only Explorer meanwhile
+      (a tooltip, an add, a delete) caught up on; icons of an app that died removed from both trays;
+      with -SkipMouse left out, tooltips and popups as in Explorer: a version 4 icon without
+      NIF_SHOWTIP gets NIN_POPUPOPEN after the hover delay and no tooltip, NIN_POPUPCLOSE when the
+      pointer leaves, a button goes down or the tray hides; no WM_MOUSEHOVER or WM_MOUSELEAVE;
     - hand-back on a graceful exit and after the process is killed (watchdog), FreeSystemTray's own
       icon leaving Explorer's tray both times.
   The balloon check shows a real Windows notification ("Balloon from SmokeA").
@@ -145,6 +152,19 @@ function Last-ShowHide([string]$dir) {
 
 function Write-Settings([string]$json) { Set-Content -Path (Join-Path $OutDir "settings.json") -Value $json -Encoding UTF8 }
 
+# Explorer's hidden-icons flyout, in order: "owner tooltip" per icon.
+function Explorer-Flyout {
+    $in = $false
+    foreach ($l in (Tool explorer-icons)) {
+        if ($l -match "^\[(\S+)\]") { $in = $Matches[1] -eq "overflow"; continue }
+        if ($in -and $l -match "'([^']*)' owner=(\S+)") { "$($Matches[2]) $($Matches[1])" }
+    }
+}
+
+# The test app's log lines after the first $skip.
+function Log-After([string]$name, [int]$skip) { @(Get-Content (Join-Path $OutDir "testtray-$name.log") | Select-Object -Skip $skip) }
+function Log-Count([string]$name) { @(Get-Content (Join-Path $OutDir "testtray-$name.log")).Count }
+
 # --- Preconditions -------------------------------------------------------------------------
 if (Get-Process FreeSystemTray -ErrorAction SilentlyContinue) { throw "FreeSystemTray is running; exit it first (FreeSystemTray.exe --exit)." }
 if (-not $SkipBuild) {
@@ -159,13 +179,21 @@ try {
     # --- Start: three test icons, then FreeSystemTray -------------------------------------
     $script:started += Start-Process -FilePath $testApp -ArgumentList "--name SmokeA --uid 101 --log `"$OutDir`" --color #C0392B" -PassThru
     $script:started += Start-Process -FilePath $testApp -ArgumentList "--name SmokeB --uid 102 --v4 --log `"$OutDir`" --color #2E86C1" -PassThru
-    [void](Wait-Until { (Explorer-Tip "SmokeA") -and (Explorer-Tip "SmokeB") })
+    $script:started += Start-Process -FilePath $testApp -ArgumentList "--name SmokeE --uid 105 --icons 2 --ignore-taskbarcreated --log `"$OutDir`" --color #7F8C8D" -PassThru
+    [void](Wait-Until { (Explorer-Tip "SmokeA") -and (Explorer-Tip "SmokeB") -and (Explorer-Tip "SmokeE") })
+    $flyoutBefore = @(Explorer-Flyout)
     $run = Join-Path $OutDir "run"
     $proc = Start-App $run
 
     Check "takes the tray host role" (Host-Is "FreeSystemTray")
     Check "Explorer's taskbar stays always-on-top" (Explorer-Topmost)
     Check "test icons appear in our window" ((Our-Icon $run "SmokeA") -and (Our-Icon $run "SmokeB"))
+    $flyoutAfter = @(Explorer-Flyout)
+    $kept = (@($flyoutBefore | Where-Object { $flyoutAfter -contains $_ }) -join "|") -eq (@($flyoutAfter | Where-Object { $flyoutBefore -contains $_ }) -join "|")
+    Check "Explorer's icons are imported without changing the order of its hidden icons" ($kept -and $flyoutBefore.Count -gt 0 -and
+        (Select-String -Path (Join-Path $run "FreeSystemTray.log") -Pattern "Imported \d+ icons from Explorer's tray" -Quiet)) "before: $($flyoutBefore -join ' | '); after: $($flyoutAfter -join ' | ')"
+    Check "an app that ignores TaskbarCreated is imported too, both of its icons" (Wait-Until {
+        @((Read-State $run).icons | Where-Object { $_.tip -like "SmokeE tip*" }).Count -eq 2 } 3000)
 
     # --- Mirroring ------------------------------------------------------------------------
     Post "SmokeB" 1
@@ -204,6 +232,29 @@ try {
     }
     else { Write-Host "SKIP  chevron check: no visible chevron (all icons shown?)" }
 
+    # --- The tray host role and Explorer's tray kept in step (Phase 6) ---------------------------
+    Tool raise-explorer | Out-Null
+    Check "Explorer's taskbar put above ours: the tray takes the role back within 50 ms" (Wait-Until {
+        $line = Select-String -Path (Join-Path $run "FreeSystemTray.log") -Pattern "held the tray host role for (\d+) ms" | Select-Object -Last 1
+        $line -and [int]$line.Matches[0].Groups[1].Value -le 50 -and (Host-Is "FreeSystemTray") } 3000)
+    $e = Our-Icon $run "SmokeE"
+    Start-Sleep -Milliseconds 3500   # a read of Explorer's tray from before the next gap
+    Tool explorer-tip $e.hwnd 105 "SmokeE tip, changed in Explorer only" raise | Out-Null
+    Check "a tooltip change that reached only Explorer while it held the role is caught up on" (Wait-Until {
+        (Our-Icon $run "SmokeE").tip -eq "SmokeE tip, changed in Explorer only" } 3000)
+    Start-Sleep -Milliseconds 3500
+    Tool explorer-add $e.hwnd 107 - 0x8064 "C:\SmokeE.exe" "SmokeE extra, in Explorer only" raise | Out-Null
+    function Extra { (Read-State $run).icons | Where-Object { $_.tip -like "SmokeE extra*" } }
+    $added = Wait-Until { Extra } 3000
+    Start-Sleep -Milliseconds 3500
+    Tool explorer-delete $e.hwnd 107 raise | Out-Null
+    Check "an icon added, and later deleted, while Explorer held the role is added to ours, and deleted" ($added -and
+        (Wait-Until { -not (Extra) } 3000))
+    $script:started += Start-Process -FilePath $testApp -ArgumentList "--name SmokeF --uid 108 --log `"$OutDir`" --color #34495E" -PassThru
+    [void](Wait-Until { (Our-Icon $run "SmokeF") -and (Explorer-Tip "SmokeF") } 5000)
+    Stop-Process -Id $script:started[-1].Id -Force
+    Check "the icon of an app that died is removed from our tray and from Explorer's" (Wait-Until { -not (Our-Icon $run "SmokeF") -and -not (Explorer-Tip "SmokeF") } 6000)
+
     # --- Mouse: clicks from our window, position answers by cursor --------------------------
     if (-not $SkipMouse) {
         Idle
@@ -234,6 +285,61 @@ try {
             Check "cursor on Explorer's taskbar: apps get Explorer's answer for the icon, not ours" ($theirs -ne $ours -and
                 ($theirs -like "icon rect*" -or $theirs -like "*0x00000001")) "$theirs vs ours $ours"
         }
+    }
+
+    # --- Tooltips and popups, as in Explorer (Phase 6) ---------------------------------------------
+    if (-not $SkipMouse) {
+        function Hover([string]$name) { $i = Our-Icon $run $name; Tool move ([int]$i.rect[0] + [int]([int]$i.rect[2] / 2)) ([int]$i.rect[1] + [int]([int]$i.rect[3] / 2)) | Out-Null }
+        function Away { $w = (Read-State $run).window; Tool move ([int]$w[0] - 150) ([int]$w[1] - 150) | Out-Null }
+        Idle
+        Away
+        Start-Sleep -Milliseconds 300
+        $n = Log-Count "SmokeB"
+        Hover "SmokeB"
+        Start-Sleep -Milliseconds 250
+        $early = @(Log-After "SmokeB" $n | Where-Object { $_ -match "NIN_POPUPOPEN" }).Count
+        Start-Sleep -Milliseconds 750
+        $open = @(Log-After "SmokeB" $n | Where-Object { $_ -match "NIN_POPUPOPEN" }).Count
+        $b = Our-Icon $run "SmokeB"
+        Check "version 4 without NIF_SHOWTIP: NIN_POPUPOPEN after the hover delay, and no tooltip of ours" ($early -eq 0 -and $open -eq 1 -and $b.popupOpen -and
+            -not $b.showsToolTip -and $null -eq $b.shownTip) "after 250 ms: $early, after 1 s: $open; popupOpen $($b.popupOpen), shownTip '$($b.shownTip)'"
+        Away
+        Check "NIN_POPUPCLOSE when the pointer leaves" (Wait-Until { @(Log-After "SmokeB" $n | Where-Object { $_ -match "NIN_POPUPCLOSE" }).Count -eq 1 } 2000)
+
+        Idle
+        $n = Log-Count "SmokeB"
+        Hover "SmokeB"
+        Start-Sleep -Milliseconds 900
+        $c = Our-Icon $run "SmokeB"
+        Tool click ([int]$c.rect[0] + [int]([int]$c.rect[2] / 2)) ([int]$c.rect[1] + [int]([int]$c.rect[3] / 2)) | Out-Null
+        Start-Sleep -Milliseconds 1200
+        $events = @(Log-After "SmokeB" $n | Where-Object { $_ -match "EVENT (NIN_POPUP\w+|WM_LBUTTONDOWN|NIN_SELECT)" } | ForEach-Object { $_ -replace ".*EVENT (\S+).*", '$1' })
+        Check "a click while the popup is open closes it first, and it does not open again until the pointer comes back" (($events -join " ") -eq "NIN_POPUPOPEN NIN_POPUPCLOSE WM_LBUTTONDOWN NIN_SELECT") ($events -join " ")
+
+        Idle
+        Away
+        Start-Sleep -Milliseconds 300
+        $n = Log-Count "SmokeB"
+        Hover "SmokeB"
+        [void](Wait-Until { (Our-Icon $run "SmokeB").popupOpen } 2000)
+        Send-Command $run "--hide"
+        $closed = Wait-Until { @(Log-After "SmokeB" $n | Where-Object { $_ -match "NIN_POPUPCLOSE" }).Count -eq 1 } 2000
+        Send-Command $run "--show"
+        [void](Wait-Until { Is-Shown $run } 3000)
+        Check "hiding the tray with the pointer on the icon closes its popup" $closed
+
+        Idle
+        $n = Log-Count "SmokeC"
+        $m = Log-Count "SmokeA"
+        Hover "SmokeC"
+        Start-Sleep -Milliseconds 1000
+        Hover "SmokeA"
+        Start-Sleep -Milliseconds 1000
+        Away
+        Start-Sleep -Milliseconds 300
+        $cc = Our-Icon $run "SmokeC"; $aa = Our-Icon $run "SmokeA"
+        Check "version 4 with NIF_SHOWTIP, and version 0: our tooltip, and no popup messages" ($cc.showsToolTip -and $cc.shownTip -and $aa.showsToolTip -and $aa.shownTip -and
+            @(Log-After "SmokeC" $n | Where-Object { $_ -match "NIN_POPUP" }).Count -eq 0 -and @(Log-After "SmokeA" $m | Where-Object { $_ -match "NIN_POPUP" }).Count -eq 0)
     }
 
     # --- Show/hide: commands, the hidden state, a settings edit while running ---------------
@@ -533,6 +639,9 @@ try {
     Check "starting the exe again hands over to the running one (its settings) and exits" ($p.ExitCode -eq 0 -and
         (Select-String -Path (Join-Path $run "second\FreeSystemTray.log") -Pattern "showing its settings" -Quiet))
 
+    $hoverLeave = @(Get-ChildItem $OutDir -Filter "testtray-Smoke*.log" | Select-String -Pattern "WM_MOUSEHOVER|WM_MOUSELEAVE")
+    Check "no app was sent WM_MOUSEHOVER or WM_MOUSELEAVE (Explorer sends neither)" ($hoverLeave.Count -eq 0) (($hoverLeave | Select-Object -First 2) -join "; ")
+
     # --- Graceful exit ----------------------------------------------------------------------
     Post "SmokeC" 1
     [void](Wait-Until { (Our-Icon $run "SmokeC").tip -eq "SmokeC tip #1" } 3000)
@@ -560,7 +669,7 @@ try {
 }
 finally {
     if (Get-Process FreeSystemTray -ErrorAction SilentlyContinue) { [void](Stop-App (Join-Path $OutDir "cleanup")) }
-    foreach ($name in "SmokeA", "SmokeB", "SmokeC", "SmokeD") { Post $name 6 }   # each test app deletes its icon and exits
+    foreach ($name in "SmokeA", "SmokeB", "SmokeC", "SmokeD", "SmokeE") { Post $name 6 }   # each test app deletes its icon and exits
     Start-Sleep -Milliseconds 800
     foreach ($p in $script:started) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
 }

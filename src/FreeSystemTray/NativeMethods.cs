@@ -193,6 +193,9 @@ namespace FreeSystemTray
         public static extern bool IsWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
+        public static extern uint GetDoubleClickTime();
+
+        [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool IsWindowVisible(IntPtr hWnd);
 

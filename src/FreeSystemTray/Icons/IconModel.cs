@@ -32,8 +32,11 @@ namespace FreeSystemTray.Icons
         public string? OwnerPath => Icon.OwnerPath;
         public ImageSource? Image => Icon.Image;
 
-        /// <summary>The tooltip shown: the app's, or a rule's replacement. Null for none.</summary>
-        public string? ToolTip => Rule.ToolTipFor(Icon.ToolTip);
+        /// <summary>
+        /// The tooltip shown: a rule's replacement, or the app's if it wants the standard tooltip (not a
+        /// version 4 icon that shows its own popup, <see cref="ITrayIcon.ShowsToolTip"/>). Null for none.
+        /// </summary>
+        public string? ToolTip => Rule.Tooltip != null || Icon.ShowsToolTip ? Rule.ToolTipFor(Icon.ToolTip) : null;
 
         /// <summary>What to call the icon: its label, else the first line of the app's tooltip, else its exe.</summary>
         public string Name => Rule.Label is { Length: > 0 } label ? label
@@ -91,6 +94,9 @@ namespace FreeSystemTray.Icons
                 case nameof(ITrayIcon.ToolTip):
                     Raise(nameof(ToolTip));
                     Raise(nameof(Name));
+                    break;
+                case nameof(ITrayIcon.ShowsToolTip):
+                    Raise(nameof(ToolTip));
                     break;
             }
         }

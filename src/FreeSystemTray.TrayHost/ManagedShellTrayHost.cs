@@ -31,7 +31,12 @@ namespace FreeSystemTray.TrayHost
     /// <item>Explorer's taskbar gets back the always-on-top flag ManagedShell takes away.</item>
     /// </list>
     /// It also reads Explorer's own tray now and then, to tell where Explorer shows each icon
-    /// (<see cref="ITrayIcon.ExplorerPlacement"/>).
+    /// (<see cref="ITrayIcon.ExplorerPlacement"/>), and to keep ManagedShell and Explorer's tray in
+    /// step where mirroring cannot (Phase 6): it imports Explorer's icons at start without ManagedShell's
+    /// import (which reverses Explorer's hidden-icons order), raises our window as soon as Explorer's
+    /// taskbar goes above it (<see cref="HostRoleKeeper"/>) and then catches up on what went only to
+    /// Explorer meanwhile (<see cref="GapSync"/>), gives a restarted Explorer the icons it lacks, and
+    /// removes icons whose window no longer exists from both trays.
     /// Threading: icon messages are sent messages, so any wait inside ManagedShell's handlers lets
     /// another one run in the middle and ManagedShell drops it (FINDINGS.md, "Other findings" 1).
     /// ManagedShell's collection changes therefore reach our collection through BeginInvoke, and
@@ -69,6 +74,29 @@ namespace FreeSystemTray.TrayHost
         private bool _explorerReadAgain;
         private int _ticksSinceExplorerRead;
         private bool? _explorerReadable;
+
+        private HostRoleKeeper? _keeper;
+        private List<ExplorerTrayButton>? _pendingImport;
+        private bool _monitorStarted;
+
+        /// <summary>The last two completed reads of Explorer's tray, newest first.</summary>
+        private ExplorerRead? _lastRead, _previousRead;
+
+        /// <summary>Gaps not caught up on yet: a read from before the first, and when the last ended.</summary>
+        private bool _gapPending;
+        private ExplorerRead? _gapBaseline;
+        private long _gapEndedAt;
+
+        /// <summary>Explorer's taskbar is new (Explorer restarted): give it our icons it lacks, from this time on.</summary>
+        private IntPtr _recoverFor;
+        private long _recoverAt;
+        private int _recoverAttempts;
+
+        /// <summary>
+        /// Per icon, whether its app's last NIM_ADD or NIM_MODIFY had NIF_SHOWTIP (Explorer takes the flag
+        /// from each of them; FINDINGS.md, Phase 6). Unknown for icons imported from Explorer's tray.
+        /// </summary>
+        private readonly Dictionary<NotifyIcon, bool> _showTip = new(ReferenceEqualityComparer.Instance);
 
         public ManagedShellTrayHost(TrayHostOptions? options = null)
         {
@@ -124,6 +152,12 @@ namespace FreeSystemTray.TrayHost
             area.TrayIcons.CollectionChanged += TrayIcons_CollectionChanged;
             area.NotificationBalloonShown += Area_NotificationBalloonShown;
 
+            // ManagedShell's import switches Explorer's "hide inactive icons" off and on to reach the
+            // hidden icons, which reverses the order of Explorer's hidden-icons flyout (FINDINGS.md,
+            // Phase 0). Read Explorer's three toolbars instead, now, while we are not the host yet (so
+            // waiting for Explorer is safe); the icons are handed to ManagedShell during Initialize().
+            if (_options.ImportWithoutToggling) _pendingImport = ExplorerTrayIcons.Read(ExplorerTaskbar.Find(IntPtr.Zero));
+
             // Initialize() imports Explorer's icons, creates our Shell_TrayWnd above Explorer's and
             // broadcasts TaskbarCreated. Tray messages already reach the window inside it: ManagedShell
             // forwards TaskbarCreated to Explorer with SendMessage, and sent messages run during that
@@ -138,10 +172,23 @@ namespace FreeSystemTray.TrayHost
                 InstallHook();
             }
             Log($"Tray host started: our Shell_TrayWnd is 0x{_trayHwnd.ToInt64():X}");
+            if (_pendingImport is List<ExplorerTrayButton> late)
+            {
+                // ManagedShell did not create the child window the import waits for: import now, after
+                // whatever apps have sent since, without overwriting it.
+                _pendingImport = null;
+                ImportFromExplorer(late, skipKnown: true);
+            }
 
             // The hidden window was created after the bounds were first set; move it there now.
             if (!_trayBounds.IsEmpty) SetTrayWindowBounds(_trayBounds, _trayEdge);
             if (_options.KeepExplorerTaskbarTopmost) RestoreExplorerTopmost();
+            if (_options.KeepHostRole)
+            {
+                _keeper = new HostRoleKeeper(_trayHwnd,
+                    gap => _dispatcher.BeginInvoke(DispatcherPriority.Background, () => OnRoleGap(gap)),
+                    message => _dispatcher.BeginInvoke(DispatcherPriority.Background, () => Log(message)));
+            }
             _monitor.Start();
 
             // Icons imported from Explorer were added before anyone could observe them.
@@ -171,33 +218,62 @@ namespace FreeSystemTray.TrayHost
 
         #region Subclass of our Shell_TrayWnd
 
+        /// <summary>
+        /// Runs ManagedShell's Initialize() with a CBT hook that subclasses our Shell_TrayWnd as it is
+        /// created. With our own import pending, ManagedShell's import is kept from running: it only
+        /// runs while IsAppRunningAsShell is false, and that flag is set back the moment our window is
+        /// created, before anything else in Initialize() reads it (ManagedShell's shell service objects
+        /// would load into this process if it stayed set). The import is handed to ManagedShell when it
+        /// creates its TrayNotifyWnd child, right after our window: by then ManagedShell knows its
+        /// window, so what it rejects goes on to Explorer (before, it could forward to itself), and it
+        /// has not yet broadcast TaskbarCreated, so the imported icons come first, in Explorer's order.
+        /// </summary>
         private void HookTrayWindowOnCreation(Action create)
         {
             NativeMethods.HookProc cbt = (code, wParam, lParam) =>
             {
-                if (code == NativeMethods.HCBT_CREATEWND && _originalWndProc == IntPtr.Zero && ClassNameOf(wParam) == "Shell_TrayWnd")
+                if (code == NativeMethods.HCBT_CREATEWND)
                 {
-                    try
+                    string cls = ClassNameOf(wParam);
+                    if (cls == "Shell_TrayWnd" && _originalWndProc == IntPtr.Zero)
                     {
-                        _trayHwnd = wParam;
-                        InstallHook();
+                        EnvironmentHelper.IsAppRunningAsShell = false;
+                        try
+                        {
+                            _trayHwnd = wParam;
+                            InstallHook();
+                        }
+                        catch (Exception ex)
+                        {
+                            _trayHwnd = IntPtr.Zero;
+                            Log("Could not subclass the tray window on creation: " + ex.Message);
+                        }
                     }
-                    catch (Exception ex)
+                    else if (cls == "TrayNotifyWnd" && _originalWndProc != IntPtr.Zero && _pendingImport is List<ExplorerTrayButton> import)
                     {
-                        _trayHwnd = IntPtr.Zero;
-                        Log("Could not subclass the tray window on creation: " + ex.Message);
+                        _pendingImport = null;
+                        ImportFromExplorer(import, skipKnown: false);
                     }
                 }
                 return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
             };
             IntPtr hook = NativeMethods.SetWindowsHookEx(NativeMethods.WH_CBT, cbt, IntPtr.Zero, NativeMethods.GetCurrentThreadId());
-            if (hook == IntPtr.Zero) Log($"SetWindowsHookEx(WH_CBT) failed ({Marshal.GetLastWin32Error()})");
+            if (hook == IntPtr.Zero)
+            {
+                Log($"SetWindowsHookEx(WH_CBT) failed ({Marshal.GetLastWin32Error()}); ManagedShell imports Explorer's icons itself");
+                _pendingImport = null;
+            }
+            else if (_pendingImport != null)
+            {
+                EnvironmentHelper.IsAppRunningAsShell = true;
+            }
             try
             {
                 create();
             }
             finally
             {
+                EnvironmentHelper.IsAppRunningAsShell = false;
                 if (hook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(hook);
                 GC.KeepAlive(cbt);
             }
@@ -254,11 +330,12 @@ namespace FreeSystemTray.TrayHost
         private IntPtr OnNotifyIconMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam, NativeMethods.COPYDATASTRUCT cds)
         {
             IntPtr ours = NativeMethods.CallWindowProc(_originalWndProc, hWnd, msg, wParam, lParam);
-            if (!_options.MirrorToExplorer) return ours;
             try
             {
                 byte[] payload = ReadPayload(cds);
                 if (!NotifyIconMessage.TryParse(payload, out NotifyIconMessage m)) return ours;
+                if (m.Message is Nim.Add or Nim.Modify or Nim.SetVersion) NoteToolTipFlags(m);
+                if (!_options.MirrorToExplorer) return ours;
                 IntPtr explorer = ExplorerTaskbar.Find(_trayHwnd);
                 if (explorer == IntPtr.Zero)
                 {
@@ -599,7 +676,23 @@ namespace FreeSystemTray.TrayHost
             if (explorer != _lastExplorerTray)
             {
                 Log(explorer == IntPtr.Zero ? "Explorer's taskbar is gone" : $"Explorer's taskbar is 0x{explorer.ToInt64():X}");
+                // A new taskbar after we started: Explorer restarted, or started after us. Apps re-register
+                // when it broadcasts TaskbarCreated (with us, and mirrored to it); once that has settled,
+                // it gets the icons it still lacks from us, such as those of apps that do not re-register.
+                if (explorer != IntPtr.Zero && _monitorStarted && _options.SyncWithExplorer && _options.MirrorToExplorer && _options.ReadExplorerTray)
+                {
+                    _recoverFor = explorer;
+                    _recoverAt = Stopwatch.GetTimestamp() + Stopwatch.Frequency * RecoverAfterSeconds;
+                    _recoverAttempts = 0;
+                    Log($"Explorer's taskbar is new (Explorer restarted?); in {RecoverAfterSeconds} s its tray gets our icons it still lacks");
+                }
                 _lastExplorerTray = explorer;
+            }
+            _monitorStarted = true;
+            if (_recoverAt != 0 && Stopwatch.GetTimestamp() >= _recoverAt)
+            {
+                _recoverAt = 0;
+                StartExplorerRead();
             }
 
             bool? topmost = explorer == IntPtr.Zero ? null : ExplorerTaskbar.IsTopmost(explorer);
@@ -640,8 +733,10 @@ namespace FreeSystemTray.TrayHost
             }
             _explorerReadRunning = true;
             IntPtr explorer = ExplorerTaskbar.Find(_trayHwnd);
+            bool removeDead = _options.SyncWithExplorer && _options.MirrorToExplorer;
             Task.Run(() =>
             {
+                long started = Stopwatch.GetTimestamp();
                 List<ExplorerTrayButton>? buttons = null;
                 try
                 {
@@ -651,14 +746,23 @@ namespace FreeSystemTray.TrayHost
                 {
                     _dispatcher.BeginInvoke(DispatcherPriority.Background, () => Log("Reading Explorer's tray failed: " + ex.Message));
                 }
-                _dispatcher.BeginInvoke(DispatcherPriority.Background, () => ApplyExplorerRead(buttons));
+                var read = new ExplorerRead(explorer, buttons, started, Stopwatch.GetTimestamp());
+                string? removed = removeDead && buttons != null ? RemoveDeadIconsFromExplorer(explorer, buttons) : null;
+                _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+                {
+                    if (removed != null) Log(removed);
+                    ApplyExplorerRead(read);
+                });
             });
         }
 
-        private void ApplyExplorerRead(List<ExplorerTrayButton>? buttons)
+        private void ApplyExplorerRead(ExplorerRead read)
         {
             _explorerReadRunning = false;
             if (_disposed) return;
+            List<ExplorerTrayButton>? buttons = read.Buttons;
+            _previousRead = _lastRead;
+            _lastRead = read;
             if (_explorerReadable != (buttons != null))
             {
                 _explorerReadable = buttons != null;
@@ -673,10 +777,235 @@ namespace FreeSystemTray.TrayHost
                     Log($"EXPLORER shows '{ni.Title}' ({icon.Id}): {placement}");
                 icon.SetExplorerPlacement(placement);
             }
+            if (_options.SyncWithExplorer)
+            {
+                if (_gapPending && read.StartedAt > _gapEndedAt && buttons != null)
+                {
+                    _gapPending = false;
+                    CatchUpAfterGap(_gapBaseline, read);
+                    _gapBaseline = null;
+                }
+                if (_recoverFor != IntPtr.Zero && _recoverAt == 0 && read.Explorer == _recoverFor)
+                {
+                    if (buttons != null) GiveExplorerMissingIcons(read);
+                    if (buttons != null || ++_recoverAttempts >= 5) _recoverFor = IntPtr.Zero;
+                }
+                RemoveDeadIcons();
+            }
             if (_explorerReadAgain)
             {
                 _explorerReadAgain = false;
                 StartExplorerRead();
+            }
+        }
+
+        #endregion
+
+        #region Keeping ManagedShell and Explorer's tray in step
+
+        /// <summary>Explorer's taskbar has this long to collect the apps' icons after it (re)starts, before it gets ours.</summary>
+        private const int RecoverAfterSeconds = 4;
+
+        /// <summary>A read of Explorer's tray: which taskbar, its buttons (null if it could not be read), and when.</summary>
+        private sealed record ExplorerRead(IntPtr Explorer, List<ExplorerTrayButton>? Buttons, long StartedAt, long EndedAt);
+
+        /// <summary>
+        /// Hands Explorer's icons to ManagedShell as the NIM_ADDs its own import would send, straight to
+        /// ManagedShell's window procedure: nothing is mirrored (Explorer has them already).
+        /// </summary>
+        /// <param name="skipKnown">Leave out icons ManagedShell has already: their apps have told it more recently.</param>
+        private void ImportFromExplorer(List<ExplorerTrayButton> buttons, bool skipKnown)
+        {
+            int imported = 0, skipped = 0;
+            foreach (ExplorerTrayButton b in ExplorerTrayIcons.OnePerIcon(buttons))
+            {
+                // Explorer keeps icons of windows that no longer exist until the pointer passes over them.
+                if (b.Window == IntPtr.Zero || !NativeMethods.IsWindow(b.Window) || (skipKnown && FindHostIcon(b) != null))
+                {
+                    skipped++;
+                    continue;
+                }
+                if (CallManagedShell(Nim.Add, b, Nif.Message | Nif.Tip | Nif.Icon | Nif.State)) imported++;
+                if (b.Version != 0) CallManagedShell(Nim.SetVersion, b, 0);
+            }
+            Log($"Imported {imported} icons from Explorer's tray ({skipped} left out), reading its hidden icons directly");
+        }
+
+        /// <summary>
+        /// Sends ManagedShell a message built from Explorer's copy of an icon, through its window
+        /// procedure but not our subclass: nothing is mirrored to Explorer. True if ManagedShell took it.
+        /// </summary>
+        private bool CallManagedShell(uint nim, ExplorerTrayButton b, uint flags)
+        {
+            var state = new IconState((uint)b.Window.ToInt64(), b.Uid, b.Guid, b.CallbackMessage, b.Tip, b.StateHidden, b.Version);
+            byte[] payload = NotifyIconMessage.Create(nim, state, flags, (uint)b.Icon.ToInt64());
+            IntPtr data = Marshal.AllocHGlobal(payload.Length);
+            IntPtr cds = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.COPYDATASTRUCT>());
+            try
+            {
+                Marshal.Copy(payload, 0, data, payload.Length);
+                Marshal.StructureToPtr(new NativeMethods.COPYDATASTRUCT { dwData = (IntPtr)TrayCopyData.NotifyIcon, cbData = payload.Length, lpData = data }, cds, false);
+                return NativeMethods.CallWindowProc(_originalWndProc, _trayHwnd, NativeMethods.WM_COPYDATA, _trayHwnd, cds) != IntPtr.Zero;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(cds);
+                Marshal.FreeHGlobal(data);
+            }
+        }
+
+        /// <summary>The icon ManagedShell holds for Explorer's button, matched the way ManagedShell does (window and uID, or GUID).</summary>
+        private NotifyIcon? FindHostIcon(ExplorerTrayButton b)
+        {
+            foreach (NotifyIcon ni in _shell.NotificationArea.TrayIcons)
+            {
+                if ((ni.HWnd == b.Window && ni.UID == b.Uid) || (b.Guid != Guid.Empty && ni.GUID == b.Guid)) return ni;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Explorer's taskbar was above ours for a moment. Messages sent meanwhile reached Explorer only:
+        /// compare its tray, read once the gap is over, with a read from before it.
+        /// </summary>
+        private void OnRoleGap(RoleGap gap)
+        {
+            if (_disposed) return;
+            if (_options.TraceMessages || gap.Duration > TimeSpan.FromSeconds(1))
+                Log($"Explorer's taskbar held the tray host role for {gap.Duration.TotalMilliseconds:0} ms; ours is the highest again ({gap.Raises} raise{(gap.Raises == 1 ? "" : "s")})");
+            if (!_options.SyncWithExplorer || !_options.ReadExplorerTray) return;
+            if (!_gapPending)
+            {
+                // The newest read that was over before the gap began: later ones may show part of it.
+                _gapBaseline = _lastRead is { } last && last.EndedAt < gap.LostAt ? last
+                    : _previousRead is { } previous && previous.EndedAt < gap.LostAt ? previous : null;
+                _gapPending = true;
+            }
+            _gapEndedAt = gap.RegainedAt;
+            StartExplorerRead();
+        }
+
+        private void CatchUpAfterGap(ExplorerRead? before, ExplorerRead after)
+        {
+            bool sameExplorer = before != null && before.Explorer == after.Explorer;
+            List<SyncAction> actions = GapSync.AfterGap(before?.Buttons, after.Buttons!, sameExplorer,
+                b => FindHostIcon(b) != null, NativeMethods.IsWindow);
+            var done = new List<string>();
+            foreach (SyncAction a in actions)
+            {
+                ExplorerTrayButton b = a.Button;
+                bool ok;
+                switch (a.Kind)
+                {
+                    case SyncKind.AddToHost:
+                        ok = CallManagedShell(Nim.Add, b, Nif.Message | Nif.Tip | Nif.Icon | Nif.State);
+                        if (ok && b.Version != 0) CallManagedShell(Nim.SetVersion, b, 0);
+                        break;
+                    case SyncKind.UpdateHost:
+                        ok = a.Changed == 0 || CallManagedShell(Nim.Modify, b, a.Changed);
+                        if (a.VersionChanged) ok &= CallManagedShell(Nim.SetVersion, b, 0);
+                        break;
+                    default:
+                        ok = CallManagedShell(Nim.Delete, b, 0);
+                        break;
+                }
+                done.Add($"{a.Kind} '{b.Tip}'{(a.Kind == SyncKind.UpdateHost ? $" (nif=0x{a.Changed:X}{(a.VersionChanged ? ", version" : "")})" : "")}{(ok ? "" : " FAILED")}");
+            }
+            if (done.Count > 0 || _options.TraceMessages)
+                Log($"Caught up with Explorer's tray after its taskbar held the role{(before == null ? " (no read from before)" : sameExplorer ? "" : " (Explorer restarted)")}: " +
+                    (done.Count > 0 ? string.Join("; ", done) : "nothing had changed"));
+        }
+
+        /// <summary>
+        /// After Explorer restarted: its new tray gets every icon of ours it lacks, as a full add built
+        /// from our state (as the mirroring fix-up does), so it has them after we exit or crash. Apps that
+        /// re-registered after TaskbarCreated are there already.
+        /// </summary>
+        private void GiveExplorerMissingIcons(ExplorerRead read)
+        {
+            var adds = new List<(string Title, byte[] Add, byte[]? Version)>();
+            var created = new List<IntPtr>();
+            foreach (NotifyIcon ni in _shell.NotificationArea.TrayIcons.ToList())
+            {
+                if (!NativeMethods.IsWindow(ni.HWnd)) continue;
+                var identity = new ExplorerTrayButton(ni.HWnd, ni.UID, ni.GUID, ExplorerPlacement.Unknown, false);
+                if (ExplorerTrayIcons.Find(read.Buttons!, identity) != null) continue;
+                IntPtr hIcon = ni.Icon is BitmapSource bitmap ? IconHandles.CreateFromBitmap(bitmap) : IntPtr.Zero;
+                if (hIcon != IntPtr.Zero) created.Add(hIcon);
+                var state = new IconState((uint)ni.HWnd.ToInt64(), ni.UID, ni.GUID, ni.CallbackMessage, ni.Title, ni.IsHidden, ni.Version);
+                uint flags = Nif.Message | Nif.Tip | Nif.Icon | (ni.IsHidden ? Nif.State : 0) | (_showTip.TryGetValue(ni, out bool tip) && tip ? Nif.ShowTip : 0);
+                string? exe = ni.Path == null ? null : ShellPaths.ToNotifyIconForm(ni.Path);
+                adds.Add((ni.Title ?? "", NotifyIconMessage.Create(Nim.Add, state, flags, (uint)hIcon.ToInt64(), exe),
+                    ni.Version != 0 ? NotifyIconMessage.Create(Nim.SetVersion, state, 0) : null));
+            }
+            if (adds.Count == 0)
+            {
+                Log($"Explorer's new tray has all {_shell.NotificationArea.TrayIcons.Count} of our icons");
+                return;
+            }
+            IntPtr explorer = read.Explorer, ours = _trayHwnd;
+            // Explorer's answers are waited for on a thread-pool thread, not here.
+            Task.Run(() =>
+            {
+                var results = adds.Select(a =>
+                {
+                    IntPtr? r = SendCopyData(explorer, ours, TrayCopyData.NotifyIcon, a.Add);
+                    if (a.Version != null && r is IntPtr v && v != IntPtr.Zero) SendCopyData(explorer, ours, TrayCopyData.NotifyIcon, a.Version);
+                    return $"'{a.Title}' -> {Describe(r)}";
+                }).ToList();
+                _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+                {
+                    foreach (IntPtr h in created) NativeMethods.DestroyIcon(h);
+                    Log($"Gave Explorer's new tray {adds.Count} icon(s) it lacked: {string.Join("; ", results)}");
+                });
+            });
+        }
+
+        /// <summary>
+        /// Removes our icons whose window no longer exists (the app crashed or was killed without
+        /// deleting its icon). ManagedShell does this only when the pointer passes over one, as Explorer does.
+        /// </summary>
+        private void RemoveDeadIcons()
+        {
+            List<NotifyIcon> dead = _shell.NotificationArea.TrayIcons.Where(ni => !NativeMethods.IsWindow(ni.HWnd)).ToList();
+            if (dead.Count == 0) return;
+            foreach (NotifyIcon ni in dead) _shell.NotificationArea.TrayIcons.Remove(ni);
+            Log($"Removed {dead.Count} icon(s) whose window no longer exists: {string.Join(", ", dead.Select(ni => $"'{ni.Title}'"))}");
+        }
+
+        /// <summary>
+        /// Deletes the buttons of windows that no longer exist from Explorer's tray, which keeps them
+        /// until the pointer passes over them. Mirroring put most of them there. Thread-pool thread.
+        /// </summary>
+        private static string? RemoveDeadIconsFromExplorer(IntPtr explorer, List<ExplorerTrayButton> buttons)
+        {
+            var removed = new List<string>();
+            foreach (ExplorerTrayButton b in ExplorerTrayIcons.OnePerIcon(buttons))
+            {
+                if (b.Window == IntPtr.Zero || NativeMethods.IsWindow(b.Window)) continue;
+                var state = new IconState((uint)b.Window.ToInt64(), b.Uid, b.Guid, 0, null, false, 0);
+                IntPtr? r = SendCopyData(explorer, IntPtr.Zero, TrayCopyData.NotifyIcon, NotifyIconMessage.Create(Nim.Delete, state, 0));
+                removed.Add($"'{b.Tip}' -> {Describe(r)}");
+            }
+            return removed.Count == 0 ? null : $"Removed {removed.Count} icon(s) of windows that no longer exist from Explorer's tray: {string.Join("; ", removed)}";
+        }
+
+        /// <summary>Whether the app's last add or modify asked for the standard tooltip; null while unknown.</summary>
+        internal bool? ShowTipOf(NotifyIcon icon) => _showTip.TryGetValue(icon, out bool value) ? value : null;
+
+        /// <summary>
+        /// Explorer takes NIF_SHOWTIP from every NIM_ADD and NIM_MODIFY (not only from those that set the
+        /// tooltip), and it matters from version 4 on, which NIM_SETVERSION sets. Runs inside the tray
+        /// message: it only notes the flag and tells the icon, which raises a property change.
+        /// </summary>
+        private void NoteToolTipFlags(NotifyIconMessage m)
+        {
+            NotifyIcon? icon = FindHostIcon(m);
+            if (icon == null) return;
+            if (m.Message != Nim.SetVersion) _showTip[icon] = m.Has(Nif.ShowTip);
+            foreach (ManagedShellTrayIcon ours in _icons.OfType<ManagedShellTrayIcon>())
+            {
+                if (ReferenceEquals(ours.Source, icon)) ours.RefreshToolTipMode();
             }
         }
 
@@ -709,6 +1038,7 @@ namespace FreeSystemTray.TrayHost
                 {
                     icon.Detach();
                     _icons.RemoveAt(i);
+                    _showTip.Remove(icon.Source);
                 }
             }
 
@@ -752,6 +1082,7 @@ namespace FreeSystemTray.TrayHost
             _disposed = true;
             _monitor.Stop();
             _explorerReadDelay.Stop();
+            _keeper?.Dispose();
 
             if (_started)
             {

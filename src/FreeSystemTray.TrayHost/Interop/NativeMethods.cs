@@ -120,6 +120,10 @@ namespace FreeSystemTray.TrayHost.Interop
         [DllImport("user32.dll")]
         public static extern uint GetDoubleClickTime();
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsWindow(IntPtr hWnd);
+
         public const uint MONITOR_DEFAULTTONEAREST = 2;
         public static readonly IntPtr HWND_BROADCAST = new(0xFFFF);
 

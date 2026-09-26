@@ -174,6 +174,8 @@ namespace FreeSystemTray.Diagnostics
                 d["version"] = ni.Version;
                 d["callbackMsg"] = $"0x{ni.CallbackMessage:X}";
                 d["windowAlive"] = NativeMethods.IsWindow(ni.HWnd);
+                d["showsToolTip"] = ms.ShowsToolTip;
+                d["popupOpen"] = ms.PopupOpen;
             }
             if (icon.Image is BitmapSource bs) d["iconPx"] = $"{bs.PixelWidth}x{bs.PixelHeight}";
             // What the tray drew: the screen pixels, and the source (the app's image or its .exe icon).

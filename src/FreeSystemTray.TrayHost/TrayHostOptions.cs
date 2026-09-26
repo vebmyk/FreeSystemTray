@@ -29,6 +29,27 @@ namespace FreeSystemTray.TrayHost
         /// </summary>
         public bool ReadExplorerTray { get; init; } = true;
 
+        /// <summary>
+        /// Import Explorer's icons at start by reading its three tray toolbars, instead of ManagedShell's
+        /// import, which switches off "hide inactive icons" for a moment and so reverses the order of
+        /// Explorer's hidden-icons flyout.
+        /// </summary>
+        public bool ImportWithoutToggling { get; init; } = true;
+
+        /// <summary>
+        /// Raise our Shell_TrayWnd again as soon as Explorer's taskbar goes above it (Z-order events),
+        /// rather than at ManagedShell's next 100 ms check.
+        /// </summary>
+        public bool KeepHostRole { get; init; } = true;
+
+        /// <summary>
+        /// Keep our icons and Explorer's tray in step where mirroring cannot: catch up on icon changes
+        /// that went only to Explorer while its taskbar held the role, give a restarted Explorer the icons
+        /// it lacks, and remove icons whose window no longer exists from both trays. Needs
+        /// <see cref="ReadExplorerTray"/>.
+        /// </summary>
+        public bool SyncWithExplorer { get; init; } = true;
+
         /// <summary>Log every icon message and position query (verbose, for diagnostics).</summary>
         public bool TraceMessages { get; init; }
 

@@ -12,9 +12,14 @@ namespace TestTrayApp
     /// <summary>
     /// A tray app that logs every callback it receives, so tray-host behaviour can be checked
     /// without side effects on real apps.
-    ///   TestTrayApp --name Alpha [--uid 1] [--v4] [--showtip] [--icon-px 16] [--color #C0392B] [--log DIR]
+    ///   TestTrayApp --name Alpha [--uid 1] [--icons N] [--v4] [--showtip] [--icon-px 16] [--color #C0392B]
+    ///               [--ignore-taskbarcreated] [--log DIR]
+    /// With --icons N it registers N icons from its one window, with uIDs uid to uid+N-1; the commands
+    /// apply to all of them. With --ignore-taskbarcreated it does not register again when a taskbar
+    /// broadcasts TaskbarCreated, as some apps do not.
     /// Control it by posting WM_APP+n to the window titled "TestTrayApp:NAME":
-    ///   +1 modify tooltip, +2 show balloon, +3 NIM_DELETE, +4 NIM_ADD, +5 change icon, +6 exit.
+    ///   +1 modify tooltip, +2 show balloon, +3 NIM_DELETE, +4 NIM_ADD, +5 change icon, +6 exit,
+    ///   +7 hide the icon (NIS_HIDDEN), +8 show it again, +9 modify tooltip without NIF_SHOWTIP.
     /// </summary>
     internal static class Program
     {
@@ -34,6 +39,8 @@ namespace TestTrayApp
     {
         public string Name = "Test";
         public uint Uid = 1;
+        public int Icons = 1;
+        public bool IgnoreTaskbarCreated;
         public bool V4;
         public bool ShowTip;
         public int IconPx = 16;
@@ -50,6 +57,8 @@ namespace TestTrayApp
                 {
                     case "--name": o.Name = next(); break;
                     case "--uid": o.Uid = uint.Parse(next(), CultureInfo.InvariantCulture); break;
+                    case "--icons": o.Icons = int.Parse(next(), CultureInfo.InvariantCulture); break;
+                    case "--ignore-taskbarcreated": o.IgnoreTaskbarCreated = true; break;
                     case "--v4": o.V4 = true; break;
                     case "--showtip": o.ShowTip = true; break;
                     case "--icon-px": o.IconPx = int.Parse(next(), CultureInfo.InvariantCulture); break;
@@ -91,7 +100,7 @@ namespace TestTrayApp
             Win32.AppendMenu(_menu, 0, 2, $"{_o.Name}: test item B");
             Win32.AppendMenu(_menu, 0x800 /*MF_SEPARATOR*/, 0, null);
             Win32.AppendMenu(_menu, 0, 99, "Exit test app");
-            Log($"START pid={Environment.ProcessId} hwnd=0x{Handle.ToInt64():X} uid={_o.Uid} v4={_o.V4} showtip={_o.ShowTip} iconPx={_o.IconPx}");
+            Log($"START pid={Environment.ProcessId} hwnd=0x{Handle.ToInt64():X} uid={_o.Uid} icons={_o.Icons} v4={_o.V4} showtip={_o.ShowTip} iconPx={_o.IconPx} ignoreTaskbarCreated={_o.IgnoreTaskbarCreated}");
             AddIcon("startup");
         }
 
@@ -111,13 +120,13 @@ namespace TestTrayApp
             return $"host={name}({pid}) tray=0x{tray.ToInt64():X}";
         }
 
-        private Win32.NOTIFYICONDATA BaseData(uint flags)
+        private Win32.NOTIFYICONDATA BaseData(uint flags, uint uid)
         {
             return new Win32.NOTIFYICONDATA
             {
                 cbSize = Marshal.SizeOf<Win32.NOTIFYICONDATA>(),
                 hWnd = Handle,
-                uID = _o.Uid,
+                uID = uid,
                 uFlags = flags,
                 szTip = "",
                 szInfo = "",
@@ -125,22 +134,34 @@ namespace TestTrayApp
             };
         }
 
+        /// <summary>The uIDs of this app's icons.</summary>
+        private System.Collections.Generic.IEnumerable<uint> Uids()
+        {
+            for (int i = 0; i < _o.Icons; i++) yield return _o.Uid + (uint)i;
+        }
+
+        /// <summary>A tooltip per icon: the first icon's is the plain one the smoke test looks for.</summary>
+        private string TipFor(uint uid) => uid == _o.Uid ? _tip : $"{_tip} (uid {uid})";
+
         private void AddIcon(string reason)
         {
-            uint flags = Win32.NIF_MESSAGE | Win32.NIF_ICON | Win32.NIF_TIP | (_o.ShowTip ? Win32.NIF_SHOWTIP : 0);
-            var d = BaseData(flags);
-            d.uCallbackMessage = CallbackMsg;
-            d.hIcon = _icon;
-            d.szTip = _tip;
-            bool ok = Win32.Shell_NotifyIcon(Win32.NIM_ADD, ref d);
-            int err = Marshal.GetLastWin32Error();
-            Log($"NIM_ADD ({reason}) -> {ok} (err {err}) {HostDescription()}");
-            if (_o.V4)
+            foreach (uint uid in Uids())
             {
-                var v = BaseData(0);
-                v.uTimeoutOrVersion = 4;
-                bool vok = Win32.Shell_NotifyIcon(Win32.NIM_SETVERSION, ref v);
-                Log($"NIM_SETVERSION 4 -> {vok}");
+                uint flags = Win32.NIF_MESSAGE | Win32.NIF_ICON | Win32.NIF_TIP | (_o.ShowTip ? Win32.NIF_SHOWTIP : 0);
+                var d = BaseData(flags, uid);
+                d.uCallbackMessage = CallbackMsg;
+                d.hIcon = _icon;
+                d.szTip = TipFor(uid);
+                bool ok = Win32.Shell_NotifyIcon(Win32.NIM_ADD, ref d);
+                int err = Marshal.GetLastWin32Error();
+                Log($"NIM_ADD uid={uid} ({reason}) -> {ok} (err {err}) {HostDescription()}");
+                if (_o.V4)
+                {
+                    var v = BaseData(0, uid);
+                    v.uTimeoutOrVersion = 4;
+                    bool vok = Win32.Shell_NotifyIcon(Win32.NIM_SETVERSION, ref v);
+                    Log($"NIM_SETVERSION 4 uid={uid} -> {vok}");
+                }
             }
         }
 
@@ -166,8 +187,8 @@ namespace TestTrayApp
         {
             if (m.Msg == TaskbarCreatedMsg)
             {
-                Log($"TaskbarCreated received; {HostDescription()}");
-                AddIcon("TaskbarCreated");
+                Log($"TaskbarCreated received; {HostDescription()}{(_o.IgnoreTaskbarCreated ? "; ignored" : "")}");
+                if (!_o.IgnoreTaskbarCreated) AddIcon("TaskbarCreated");
                 return;
             }
 
@@ -177,23 +198,42 @@ namespace TestTrayApp
                     OnTrayCallback(m.WParam, m.LParam);
                     return;
                 case Win32.WM_APP + 1:
+                case Win32.WM_APP + 9:
                     _tipCounter++;
                     _tip = $"{_o.Name} tip #{_tipCounter}";
-                    var td = BaseData(Win32.NIF_TIP | (_o.ShowTip ? Win32.NIF_SHOWTIP : 0));
-                    td.szTip = _tip;
-                    Log($"NIM_MODIFY tooltip -> {Win32.Shell_NotifyIcon(Win32.NIM_MODIFY, ref td)} '{_tip}' {HostDescription()}");
+                    bool showTip = _o.ShowTip && m.Msg == Win32.WM_APP + 1;
+                    foreach (uint uid in Uids())
+                    {
+                        var td = BaseData(Win32.NIF_TIP | (showTip ? Win32.NIF_SHOWTIP : 0), uid);
+                        td.szTip = TipFor(uid);
+                        Log($"NIM_MODIFY tooltip{(showTip ? " (NIF_SHOWTIP)" : "")} uid={uid} -> {Win32.Shell_NotifyIcon(Win32.NIM_MODIFY, ref td)} '{td.szTip}' {HostDescription()}");
+                    }
                     return;
                 case Win32.WM_APP + 2:
                     _balloonCounter++;
-                    var bd = BaseData(Win32.NIF_INFO);
+                    var bd = BaseData(Win32.NIF_INFO, _o.Uid);
                     bd.szInfoTitle = $"Balloon from {_o.Name}";
                     bd.szInfo = $"Test balloon #{_balloonCounter}";
                     bd.dwInfoFlags = 1; // NIIF_INFO
                     Log($"NIM_MODIFY balloon #{_balloonCounter} -> {Win32.Shell_NotifyIcon(Win32.NIM_MODIFY, ref bd)} {HostDescription()}");
                     return;
                 case Win32.WM_APP + 3:
-                    var dd = BaseData(0);
-                    Log($"NIM_DELETE -> {Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref dd)} {HostDescription()}");
+                    foreach (uint uid in Uids())
+                    {
+                        var dd = BaseData(0, uid);
+                        Log($"NIM_DELETE uid={uid} -> {Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref dd)} {HostDescription()}");
+                    }
+                    return;
+                case Win32.WM_APP + 7:
+                case Win32.WM_APP + 8:
+                    bool hide = m.Msg == Win32.WM_APP + 7;
+                    foreach (uint uid in Uids())
+                    {
+                        var hd = BaseData(Win32.NIF_STATE, uid);
+                        hd.dwState = hide ? Win32.NIS_HIDDEN : 0;
+                        hd.dwStateMask = Win32.NIS_HIDDEN;
+                        Log($"NIM_MODIFY NIS_HIDDEN={hide} uid={uid} -> {Win32.Shell_NotifyIcon(Win32.NIM_MODIFY, ref hd)} {HostDescription()}");
+                    }
                     return;
                 case Win32.WM_APP + 4:
                     AddIcon("requested");
@@ -202,9 +242,12 @@ namespace TestTrayApp
                     _iconCounter++;
                     Color[] colors = { Color.SeaGreen, Color.RoyalBlue, Color.DarkOrange, Color.Purple };
                     IntPtr newIcon = MakeIcon(colors[_iconCounter % colors.Length]);
-                    var id = BaseData(Win32.NIF_ICON);
-                    id.hIcon = newIcon;
-                    Log($"NIM_MODIFY icon #{_iconCounter} -> {Win32.Shell_NotifyIcon(Win32.NIM_MODIFY, ref id)} {HostDescription()}");
+                    foreach (uint uid in Uids())
+                    {
+                        var id = BaseData(Win32.NIF_ICON, uid);
+                        id.hIcon = newIcon;
+                        Log($"NIM_MODIFY icon #{_iconCounter} uid={uid} -> {Win32.Shell_NotifyIcon(Win32.NIM_MODIFY, ref id)} {HostDescription()}");
+                    }
                     Win32.DestroyIcon(_icon);
                     _icon = newIcon;
                     return;
@@ -247,7 +290,7 @@ namespace TestTrayApp
             string rect = "";
             if (evt is Win32.WM_LBUTTONUP or Win32.WM_RBUTTONUP or Win32.WM_CONTEXTMENU or Win32.NIN_SELECT or Win32.WM_LBUTTONDBLCLK)
             {
-                var ident = new Win32.NOTIFYICONIDENTIFIER { cbSize = Marshal.SizeOf<Win32.NOTIFYICONIDENTIFIER>(), hWnd = Handle, uID = _o.Uid };
+                var ident = new Win32.NOTIFYICONIDENTIFIER { cbSize = Marshal.SizeOf<Win32.NOTIFYICONIDENTIFIER>(), hWnd = Handle, uID = uid };
                 int hr = Win32.Shell_NotifyIconGetRect(ref ident, out var r);
                 rect = hr == 0 ? $" iconRect=[{r.Left},{r.Top},{r.Right},{r.Bottom}]" : $" iconRect=hr0x{hr:X8}";
             }
@@ -270,8 +313,11 @@ namespace TestTrayApp
 
         private void Exit(string reason)
         {
-            var d = BaseData(0);
-            Log($"EXIT ({reason}); NIM_DELETE -> {Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref d)}");
+            foreach (uint uid in Uids())
+            {
+                var d = BaseData(0, uid);
+                Log($"EXIT ({reason}); NIM_DELETE uid={uid} -> {Win32.Shell_NotifyIcon(Win32.NIM_DELETE, ref d)}");
+            }
             DestroyHandle();
             Application.ExitThread();
         }
@@ -289,7 +335,8 @@ namespace TestTrayApp
         public const int NIN_BALLOONTIMEOUT = 0x0404, NIN_BALLOONUSERCLICK = 0x0405, NIN_POPUPOPEN = 0x0406, NIN_POPUPCLOSE = 0x0407;
 
         public const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIM_SETVERSION = 4;
-        public const uint NIF_MESSAGE = 0x1, NIF_ICON = 0x2, NIF_TIP = 0x4, NIF_INFO = 0x10, NIF_SHOWTIP = 0x80;
+        public const uint NIF_MESSAGE = 0x1, NIF_ICON = 0x2, NIF_TIP = 0x4, NIF_STATE = 0x8, NIF_INFO = 0x10, NIF_SHOWTIP = 0x80;
+        public const uint NIS_HIDDEN = 0x1;
         public const uint TPM_RIGHTBUTTON = 0x0002, TPM_RETURNCMD = 0x0100;
 
         public static string EventName(int e) => e switch

@@ -45,8 +45,29 @@ namespace FreeSystemTray
         private Point? _leftDownAt;
         private bool _menuGesture;
 
+        /// <summary>The icon's app was told the pointer arrived, and not yet that it left.</summary>
+        private ITrayIcon? _entered;
+
+        public IconCell()
+        {
+            // Explorer shows a tray icon's tooltip after the double-click time (500 ms by default); WPF waits 1 s.
+            ToolTipService.SetInitialShowDelay(this, (int)NativeMethods.GetDoubleClickTime());
+            // The window hiding (the hotkey, auto-hide) with the pointer on an icon: WPF sends no
+            // MouseLeave, and the app would keep its popup open until the pointer came back.
+            IsVisibleChanged += (_, e) =>
+            {
+                if (!(bool)e.NewValue) Leave();
+            };
+        }
+
         /// <summary>The cell's screen rectangle in physical pixels.</summary>
         internal PixelRect ScreenBounds() => TrayWindow.ScreenBoundsOf(this);
+
+        private void Leave()
+        {
+            _entered?.OnMouseLeave();
+            _entered = null;
+        }
 
         protected override void OnMouseEnter(MouseEventArgs e)
         {
@@ -55,6 +76,7 @@ namespace FreeSystemTray
             if (Item is not { } item || Host?.IsDraggingIcon == true) return;
             // Apps ask where their icon is right after it is clicked; make sure the answer is current.
             item.Icon.SetScreenBounds(ScreenBounds());
+            _entered = item.Icon;
             item.Icon.OnMouseEnter();
         }
 
@@ -66,7 +88,7 @@ namespace FreeSystemTray
             Point? pressed = _leftDownAt;
             _leftDownAt = null;
             if (Item is not { } item || Host is not { } host || host.IsDraggingIcon) return;
-            item.Icon.OnMouseLeave();
+            Leave();
             // Pressed here and pulled out quickly: that is a drag too.
             if (pressed != null && e.LeftButton == MouseButtonState.Pressed) host.BeginIconDrag(this, item);
         }
@@ -83,7 +105,7 @@ namespace FreeSystemTray
                 {
                     _leftDownAt = null;
                     CellState.SetIsPressed(this, false);
-                    item.Icon.OnMouseLeave(); // the app's tooltip or popup closes, as when the pointer leaves
+                    Leave(); // the app's tooltip or popup closes, as when the pointer leaves
                     host.BeginIconDrag(this, item);
                     return;
                 }

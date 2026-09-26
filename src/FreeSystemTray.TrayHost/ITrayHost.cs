@@ -56,6 +56,13 @@ namespace FreeSystemTray.TrayHost
         ImageSource? Image { get; }
         string? ToolTip { get; }
 
+        /// <summary>
+        /// Whether the tray shows the standard tooltip for the icon, as Explorer would: not for a
+        /// version 4 icon whose app did not ask for it (NIF_SHOWTIP); that app gets NIN_POPUPOPEN when
+        /// the pointer rests on the icon and shows its own popup.
+        /// </summary>
+        bool ShowsToolTip { get; }
+
         /// <summary>The app has hidden its icon (NIS_HIDDEN).</summary>
         bool IsHidden { get; }
 
@@ -67,7 +74,10 @@ namespace FreeSystemTray.TrayHost
         /// <summary>Screen rectangle of the icon in physical pixels, for Shell_NotifyIconGetRect.</summary>
         void SetScreenBounds(PixelRect bounds);
 
+        /// <summary>The pointer arrived on the icon: its app hears of it as from Explorer's tray, popup included.</summary>
         void OnMouseEnter();
+
+        /// <summary>The pointer left the icon, or the icon is no longer on screen.</summary>
         void OnMouseLeave();
         void OnMouseMove();
         void OnMouseDown(MouseButton button);

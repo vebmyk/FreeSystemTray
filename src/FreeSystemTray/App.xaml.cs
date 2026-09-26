@@ -103,6 +103,9 @@ namespace FreeSystemTray
                 KeepExplorerTaskbarTopmost = !_options.NoTopmostFix,
                 ForwardAutoHideQueries = !_options.NoAutoHideForward,
                 RoutePositionQueries = !_options.NoQueryRouting,
+                ImportWithoutToggling = !_options.NoOwnImport,
+                KeepHostRole = !_options.NoRoleKeeper,
+                SyncWithExplorer = !_options.NoExplorerSync,
                 TraceMessages = _options.Verbose,
                 Log = AppLog.Write
             });

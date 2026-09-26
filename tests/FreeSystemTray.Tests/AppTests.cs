@@ -181,10 +181,11 @@ namespace FreeSystemTray.Tests
         public void Options_are_read()
         {
             CommandLine o = CommandLine.Parse(new[] { "--settings", @"C:\s.json", "--log-dir", @"C:\logs", "--exit", "--no-watchdog",
-                "--no-mirror", "--no-topmost-fix", "--no-autohide-forward", "--no-query-routing" });
+                "--no-mirror", "--no-topmost-fix", "--no-autohide-forward", "--no-query-routing", "--no-own-import", "--no-role-keeper", "--no-explorer-sync" });
             Assert.Equal(@"C:\s.json", o.SettingsPath);
             Assert.Equal(@"C:\logs", o.EffectiveLogDir);
             Assert.True(o.Exit && o.NoWatchdog && o.NoMirror && o.NoTopmostFix && o.NoAutoHideForward && o.NoQueryRouting);
+            Assert.True(o.NoOwnImport && o.NoRoleKeeper && o.NoExplorerSync);
         }
 
         [Fact]

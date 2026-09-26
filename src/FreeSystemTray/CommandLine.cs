@@ -22,7 +22,8 @@ namespace FreeSystemTray
     ///   --import-theme FILE   copy a theme file into the themes folder and switch to it
     ///   --export-theme FILE   write the current theme, every value spelled out, to FILE
     ///   --no-watchdog     do not start the watchdog process
-    ///   --no-mirror, --no-topmost-fix, --no-autohide-forward, --no-query-routing
+    ///   --no-mirror, --no-topmost-fix, --no-autohide-forward, --no-query-routing, --no-own-import,
+    ///   --no-role-keeper, --no-explorer-sync
     ///                     turn off one workaround (ManagedShell as shipped), for comparison tests
     ///   --watchdog PID START_TIME   internal: run as the watchdog of process PID
     /// </code>
@@ -49,6 +50,9 @@ namespace FreeSystemTray
         public bool NoTopmostFix { get; private set; }
         public bool NoAutoHideForward { get; private set; }
         public bool NoQueryRouting { get; private set; }
+        public bool NoOwnImport { get; private set; }
+        public bool NoRoleKeeper { get; private set; }
+        public bool NoExplorerSync { get; private set; }
         public int? WatchdogPid { get; private set; }
         public long WatchdogStartTime { get; private set; }
 
@@ -79,6 +83,9 @@ namespace FreeSystemTray
                     case "--no-topmost-fix": o.NoTopmostFix = true; break;
                     case "--no-autohide-forward": o.NoAutoHideForward = true; break;
                     case "--no-query-routing": o.NoQueryRouting = true; break;
+                    case "--no-own-import": o.NoOwnImport = true; break;
+                    case "--no-role-keeper": o.NoRoleKeeper = true; break;
+                    case "--no-explorer-sync": o.NoExplorerSync = true; break;
                     case "--watchdog":
                         o.WatchdogPid = int.Parse(Next(), CultureInfo.InvariantCulture);
                         o.WatchdogStartTime = long.Parse(Next(), CultureInfo.InvariantCulture);

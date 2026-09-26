@@ -4,8 +4,30 @@ using System.Runtime.InteropServices;
 
 namespace FreeSystemTray.TrayHost.Interop
 {
-    /// <summary>One button of Explorer's tray toolbars: whose icon it is, and where and whether Explorer shows it.</summary>
-    internal readonly record struct ExplorerTrayButton(IntPtr Window, uint Uid, Guid Guid, ExplorerPlacement Toolbar, bool Hidden);
+    /// <summary>
+    /// One button of Explorer's tray toolbars: whose icon it is, where and whether Explorer shows it,
+    /// and Explorer's copy of the icon's data (read from Explorer's memory; the icon handle is
+    /// Explorer's copy, valid in any process of the session until Explorer replaces it).
+    /// </summary>
+    internal readonly record struct ExplorerTrayButton(IntPtr Window, uint Uid, Guid Guid, ExplorerPlacement Toolbar, bool Hidden)
+    {
+        public string? Tip { get; init; }
+        public IntPtr Icon { get; init; }
+        public uint CallbackMessage { get; init; }
+        public uint Version { get; init; }
+
+        /// <summary>
+        /// Explorer's state bits. Bit 0 is NIS_HIDDEN: set when the app hid its icon, and also for
+        /// icons Windows hides, such as Meet Now (seen on Windows 10 22H2: 0x400001 and 0x200001).
+        /// </summary>
+        public uint State { get; init; }
+
+        public bool StateHidden => (State & 1) != 0;
+
+        /// <summary>Whether <paramref name="other"/> is the same icon, the way Shell_NotifyIcon identifies icons.</summary>
+        public bool SameIcon(ExplorerTrayButton other) =>
+            Guid != Guid.Empty || other.Guid != Guid.Empty ? Guid == other.Guid : Window == other.Window && Uid == other.Uid;
+    }
 
     /// <summary>
     /// Reads the icons Explorer's own tray shows, from its three toolbars on Windows 10: the taskbar's,
@@ -13,7 +35,10 @@ namespace FreeSystemTray.TrayHost.Interop
     /// flyout's. Explorer keeps a button for icons it hides, such as Meet Now while it is turned off,
     /// with the toolbar's hidden state (seen on Windows 10 22H2). Each button's data is Explorer's
     /// TRAYDATA, read from its memory; the same layout ManagedShell reads when it imports Explorer's icons.
-    /// Sends messages to Explorer and waits for them: call it off the tray thread.
+    /// The flyout's toolbar is read directly, so unlike ManagedShell's import this never switches off
+    /// "hide inactive icons" (which reversed the flyout's order; FINDINGS.md, Phase 0).
+    /// Sends messages to Explorer and waits for them: call it off the tray thread, or before the tray
+    /// host takes the role.
     /// </summary>
     internal static class ExplorerTrayIcons
     {
@@ -24,8 +49,10 @@ namespace FreeSystemTray.TrayHost.Interop
         private const uint TimeoutMs = 500;
 
         /// <summary>
-        /// Every button of Explorer's tray toolbars, or null if they cannot be read: Explorer's taskbar
-        /// or its toolbars are missing (Explorer restarting; Windows 11 has none), or Explorer did not answer.
+        /// Every button of Explorer's tray toolbars, in the order they appear from left to right: the
+        /// hidden-icons flyout's (behind the chevron), the system-promoted ones, the taskbar's. Null if
+        /// they cannot be read: Explorer's taskbar or its toolbars are missing (Explorer restarting;
+        /// Windows 11 has none), or Explorer did not answer.
         /// </summary>
         public static List<ExplorerTrayButton>? Read(IntPtr explorerTray)
         {
@@ -49,7 +76,7 @@ namespace FreeSystemTray.TrayHost.Interop
                 var buttons = new List<ExplorerTrayButton>();
                 foreach ((IntPtr toolbar, ExplorerPlacement placement) in new[]
                          {
-                             (taskbar, ExplorerPlacement.Taskbar), (systemPromoted, ExplorerPlacement.Taskbar), (overflow, ExplorerPlacement.Overflow)
+                             (overflow, ExplorerPlacement.Overflow), (systemPromoted, ExplorerPlacement.Taskbar), (taskbar, ExplorerPlacement.Taskbar)
                          })
                 {
                     if (toolbar != IntPtr.Zero && !ReadToolbar(toolbar, placement, process, remote, buttons)) return null;
@@ -71,7 +98,14 @@ namespace FreeSystemTray.TrayHost.Interop
                 if (SendMessageTimeout(toolbar, TB_GETBUTTON, (IntPtr)i, remote, SMTO_ABORTIFHUNG, TimeoutMs, out IntPtr ok) == IntPtr.Zero) return false;
                 if (ok == IntPtr.Zero || !TryRead(process, remote, out TBBUTTON button) || button.dwData == IntPtr.Zero) continue;
                 if (!TryRead(process, button.dwData, out TRAYDATA data)) continue;
-                buttons.Add(new ExplorerTrayButton(data.hWnd, data.uID, data.guidItem, placement, (button.fsState & TBSTATE_HIDDEN) != 0));
+                buttons.Add(new ExplorerTrayButton(data.hWnd, data.uID, data.guidItem, placement, (button.fsState & TBSTATE_HIDDEN) != 0)
+                {
+                    Tip = data.szIconText,
+                    Icon = data.hIcon,
+                    CallbackMessage = data.uCallbackMessage,
+                    Version = data.uVersion,
+                    State = data.dwState
+                });
             }
             return true;
         }
@@ -92,6 +126,35 @@ namespace FreeSystemTray.TrayHost.Interop
                 found = ExplorerPlacement.Hidden;
             }
             return found;
+        }
+
+        /// <summary>The button of the same icon as <paramref name="icon"/>, preferring a visible one; null if none.</summary>
+        public static ExplorerTrayButton? Find(IReadOnlyList<ExplorerTrayButton> buttons, ExplorerTrayButton icon)
+        {
+            ExplorerTrayButton? found = null;
+            foreach (ExplorerTrayButton b in buttons)
+            {
+                if (!b.SameIcon(icon)) continue;
+                if (!b.Hidden) return b;
+                found ??= b;
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// The buttons with one per icon (the visible one if Explorer has two), in their order. Explorer
+        /// can list an icon twice for a moment while it moves it between toolbars.
+        /// </summary>
+        public static List<ExplorerTrayButton> OnePerIcon(IReadOnlyList<ExplorerTrayButton> buttons)
+        {
+            var result = new List<ExplorerTrayButton>();
+            foreach (ExplorerTrayButton b in buttons)
+            {
+                int i = result.FindIndex(r => r.SameIcon(b));
+                if (i < 0) result.Add(b);
+                else if (result[i].Hidden && !b.Hidden) result[i] = b;
+            }
+            return result;
         }
 
         private static bool TryRead<T>(IntPtr process, IntPtr address, out T value) where T : struct

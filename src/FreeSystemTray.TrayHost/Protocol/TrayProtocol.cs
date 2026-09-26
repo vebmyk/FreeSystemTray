@@ -99,6 +99,9 @@ namespace FreeSystemTray.TrayHost.Protocol
         private const int ExePathOffset = FullSize;
         private const int ExePathChars = 260;
 
+        /// <summary>The size shell32 sends on Windows 10: <see cref="FullSize"/> plus the executable path.</summary>
+        public const int Shell32Size = ExePathOffset + ExePathChars * 2;
+
         public const uint Signature = 0x34753423;
         public const uint NisHidden = 0x1;
 
@@ -167,6 +170,39 @@ namespace FreeSystemTray.TrayHost.Protocol
             icon.Guid.TryWriteBytes(s.Slice(GuidOffset, 16));
             if (exePath != null && s.Length >= ExePathOffset + ExePathChars * 2) WriteString(s, ExePathOffset, ExePathChars, exePath);
             return add;
+        }
+
+        /// <summary>
+        /// A message built from scratch, shaped like shell32's: for icons the tray host learns about
+        /// from Explorer's tray rather than from their app, and for adds sent to Explorer with no
+        /// message of the app's to start from. NIF_GUID is added when the icon has a GUID; NIF_STATE
+        /// in <paramref name="flags"/> sets or clears NIS_HIDDEN; NIM_SETVERSION carries the icon's version.
+        /// </summary>
+        /// <param name="exePath">For NIM_ADD: the app's executable in shell32's form (<see cref="Interop.ShellPaths"/>).</param>
+        public static byte[] Create(uint nim, IconState icon, uint flags, uint hIcon = 0, string? exePath = null)
+        {
+            var msg = new byte[Shell32Size];
+            Span<byte> s = msg;
+            if (icon.Guid != Guid.Empty) flags |= Nif.Guid;
+            if (hIcon == 0) flags &= ~Nif.Icon;
+            BinaryPrimitives.WriteUInt32LittleEndian(s, Signature);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(MessageOffset), nim);
+            BinaryPrimitives.WriteInt32LittleEndian(s.Slice(Data), FullSize - Data);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(HWndOffset), icon.HWnd);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(UidOffset), icon.Uid);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(FlagsOffset), nim == Nim.SetVersion || nim == Nim.Delete ? flags & Nif.Guid : flags);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(CallbackOffset), icon.CallbackMessage);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(IconOffset), hIcon);
+            WriteString(s, TipOffset, TipChars, icon.Tip);
+            if ((flags & Nif.State) != 0)
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(StateOffset), icon.Hidden ? NisHidden : 0);
+                BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(StateMaskOffset), NisHidden);
+            }
+            if (nim == Nim.SetVersion) BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(VersionOffset), icon.Version);
+            icon.Guid.TryWriteBytes(s.Slice(GuidOffset, 16));
+            if (nim == Nim.Add && exePath != null) WriteString(s, ExePathOffset, ExePathChars, exePath);
+            return msg;
         }
 
         /// <summary>A NIM_SETVERSION for the icon, built from <paramref name="template"/>. Null if it is too short.</summary>
