@@ -44,6 +44,12 @@ namespace FreeSystemTray.ShowHide
             _idleSince = null;
         }
 
+        /// <summary>
+        /// The user clicked in the tray: it has been visited, even if the pointer came and went between
+        /// two of the timer's checks (a quick right-click, then away to the menu).
+        /// </summary>
+        public void Clicked() => _visited = true;
+
         /// <summary>Called periodically while the tray is shown.</summary>
         /// <param name="pointerOnTray">The pointer is over the tray window, or in the hotspot that showed it.</param>
         /// <param name="inUse">A menu or flyout opened from the tray is open, or the tray is being dragged or its own menu is open.</param>

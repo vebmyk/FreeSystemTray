@@ -263,7 +263,11 @@ namespace FreeSystemTray.ShowHide
         }
 
         /// <summary>A mouse button went down or up on one of the tray's icons.</summary>
-        public void NoteTrayClick() => _interaction.Clicked(ShellWatcher.Now());
+        public void NoteTrayClick()
+        {
+            _interaction.Clicked(ShellWatcher.Now());
+            _policy.Clicked();
+        }
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {

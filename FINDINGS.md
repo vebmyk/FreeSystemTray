@@ -115,6 +115,29 @@ Two things were checked only in part, because the full check changes this machin
 6. **Some keys have two names** (`OemTilde` and `Oem3`, `PageDown` and `Next`); the settings window
    writes the readable one.
 
+### Phase 5 follow-up: menus that closed at once
+
+Found by you right after Phase 5: the menus of the grip and of FreeSystemTray's own icon closed as
+soon as they opened. Fixed the same day; the smoke test now has 89 checks (3 new) and passes, and the
+unit tests 267.
+
+1. **A WPF menu closes at once if the foreground is taken, after it opened, with a window it does not
+   belong to.** To get the keyboard (Esc, arrows), the rewritten app menu activated its own popup
+   window once it was open; the Shift+right-click menu activated the tray window, which is fine in the
+   tray but would have closed it in the flyout. A small WPF test app of its own showed the rule: taken
+   in `Opened` with the popup's window, or with a window other than the menu's (a hidden one, as for
+   FreeSystemTray's icon while the tray is hidden), the menu closed after about 150 ms; taken before the
+   menu opens, with any of these windows, it stayed open and took Esc. All of the tray's menus now
+   take the foreground with the tray window before they open. The Phase 1 grip menu took it in
+   `Opened`, with the window it belonged to, which is why it worked.
+2. **An auto-hiding tray shown by the hotkey could stay shown after a quick click.** Its timer starts
+   once the pointer has been over the tray at one of its checks (every 200 ms); a right-click on an
+   icon and a move away between two checks never counted. A click in the tray now counts as a visit.
+   The smoke test showed it once, when its timing happened to fall between two checks.
+3. **Windows refuses a test window the foreground while you are working** (the foreground lock, 200 s
+   after your last input in another app). One smoke-test run failed its full-screen checks that way,
+   while you were typing in another window; the next runs passed.
+
 ### Checking Meet Now
 
 Not done by me, because it needs an Explorer restart:

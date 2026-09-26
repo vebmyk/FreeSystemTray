@@ -237,8 +237,9 @@ themes or icon management. It builds the solution, starts four test tray icons a
 checks mirroring, the fix-ups, the query answers, clicks, showing and hiding (commands, the hidden
 state, a settings edit, hotspot, hotkey, click-away, the timer, a menu keeping the tray shown),
 stepping behind full-screen windows, icon and tray sizes, themes, icon rules and the hidden-icons
-flyout (rules, an icon Windows hides, order, dragging, the icon menu), the app's own icon, the
-settings window, and the hand-back to Explorer after an exit and after a kill (86 checks).
+flyout (rules, an icon Windows hides, order, dragging, the icon menu), the tray's own menus staying
+open, the app's own icon, the settings window, and the hand-back to Explorer after an exit and after
+a kill (89 checks).
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-SmokeTest.ps1

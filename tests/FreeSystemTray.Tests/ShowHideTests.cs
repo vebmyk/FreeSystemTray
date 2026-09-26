@@ -107,6 +107,18 @@ namespace FreeSystemTray.Tests
         }
 
         [Fact]
+        public void A_click_in_the_tray_counts_as_a_visit_even_between_two_checks()
+        {
+            AutoHidePolicy p = Policy(delay: 0.8);
+            p.Shown(ShowCause.Hotkey);
+            Assert.False(p.HideOnTimer(S(0), false, false));
+            p.Clicked(); // on an icon, the pointer there only between two checks
+            Assert.False(p.HideOnTimer(S(1), false, true));   // the icon's menu is open
+            Assert.False(p.HideOnTimer(S(3), false, false));  // closed
+            Assert.True(p.HideOnTimer(S(3.8), false, false));
+        }
+
+        [Fact]
         public void Shown_by_the_hotspot_the_timer_runs_once_the_pointer_leaves_it()
         {
             AutoHidePolicy p = Policy();

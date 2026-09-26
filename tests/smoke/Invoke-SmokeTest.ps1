@@ -24,7 +24,9 @@
     - management: FreeSystemTray's own icon in both trays; icon rules (hidden icons, hidden, a
       tooltip), an icon Windows hides, the default placement, the saved order and a tray size limit;
       with -SkipMouse left out also the hidden-icons flyout (open, click an icon in it, close),
-      dragging icons (to a new place, onto the chevron) and Shift+right-click's menu; the settings
+      dragging icons (to a new place, onto the chevron), and the tray's own menus staying open and
+      taking Esc (the grip's, FreeSystemTray's icon's, Shift+right-click's in the tray and the
+      flyout); the settings
       window (--open-settings, and starting the exe a second time);
     - hand-back on a graceful exit and after the process is killed (watchdog), FreeSystemTray's own
       icon leaving Explorer's tray both times.
@@ -426,6 +428,22 @@ try {
     function Saved-Icons { (Get-Content (Join-Path $OutDir "settings.json") -Raw | ConvertFrom-Json).icons }
     function Explorer-Has-Ours { [bool](Tool explorer-icons | Select-String "'FreeSystemTray' owner=") }
     function Center([object]$r) { return @(([int]$r[0] + [int]([int]$r[2] / 2)), ([int]$r[1] + [int]([int]$r[3] / 2))) }
+    # Whether the tray's menu named $what is open or closed, from the app's log.
+    function Last-Menu([string]$what) {
+        $line = Select-String -Path (Join-Path $run "FreeSystemTray.log") -Pattern "$what (opened|closed)$" | Select-Object -Last 1
+        if ($line) { return $line.Matches[0].Groups[1].Value }
+        return ""
+    }
+    # Opens a menu with $open; true if it is still open 0.8 s later and Esc then closes it (it has the keyboard).
+    function Menu-Stays-Open([string]$what, [scriptblock]$open) {
+        Idle
+        & $open
+        Start-Sleep -Milliseconds 800
+        $stayed = (Last-Menu $what) -eq "opened"
+        Idle
+        Tool key esc | Out-Null
+        return $stayed -and (Wait-Until { (Last-Menu $what) -eq "closed" } 2000)
+    }
     $mine = (Read-State $run).icons | Where-Object { $_.path -like "*\FreeSystemTray.exe" } | Select-Object -First 1
     Check "FreeSystemTray's own icon is in the tray and in Explorer's tray" ((Read-State $run).appIcon -and $mine.placement -eq "Tray" -and (Explorer-Has-Ours)) "placement $($mine.placement)"
 
@@ -484,13 +502,27 @@ try {
 
         $d = Center (Smoke "SmokeD").rect
         $heard = @(Select-String -Path (Join-Path $OutDir "testtray-SmokeD.log") -Pattern "MENU OPEN|WM_RBUTTON").Count
+        Check "Shift+right-click opens the tray's menu for the icon (it stays open; Esc closes it), and its app hears nothing of it" ((Menu-Stays-Open "Icon menu for SmokeD.*" {
+            Tool click $d[0] $d[1] right shift | Out-Null }) -and
+            @(Select-String -Path (Join-Path $OutDir "testtray-SmokeD.log") -Pattern "MENU OPEN|WM_RBUTTON").Count -eq $heard) (Last-Menu "Icon menu for SmokeD.*")
+
+        # The tray's own menus, which took the foreground too late and closed at once in the first Phase 5 build.
+        $w = (Read-State $run).window
+        Check "right-click on the grip: the app menu stays open, and Esc closes it" (Menu-Stays-Open "App menu" {
+            Tool click ([int]$w[0] + 4) ([int]$w[1] + [int]([int]$w[3] / 2)) right | Out-Null }) (Last-Menu "App menu")
+        $mine = Center ((Read-State $run).icons | Where-Object { $_.path -like "*\FreeSystemTray.exe" } | Select-Object -First 1).rect
+        Check "right-click on FreeSystemTray's own icon: the app menu stays open, and Esc closes it" (Menu-Stays-Open "App menu" {
+            Tool click $mine[0] $mine[1] right | Out-Null }) (Last-Menu "App menu")
         Idle
-        Tool click $d[0] $d[1] right shift | Out-Null
-        Check "Shift+right-click opens the tray's menu for the icon, and its app hears nothing of it" ((Wait-Until {
-            Select-String -Path (Join-Path $run "FreeSystemTray.log") -Pattern "Icon menu opened for SmokeD" -Quiet } 3000) -and
-            @(Select-String -Path (Join-Path $OutDir "testtray-SmokeD.log") -Pattern "MENU OPEN|WM_RBUTTON").Count -eq $heard)
+        $c = Center (Read-State $run).chevron
+        Tool click $c[0] $c[1] | Out-Null
+        [void](Wait-Until { (Read-State $run).overflow.open -and (Smoke "SmokeA").rect } 3000)
+        $a = Center (Smoke "SmokeA").rect
+        Check "Shift+right-click on an icon in the flyout: its menu stays open, and Esc closes it" (Menu-Stays-Open "Icon menu for SmokeA.*" {
+            Tool click $a[0] $a[1] right shift | Out-Null }) (Last-Menu "Icon menu for SmokeA.*")
         Idle
-        Tool key esc | Out-Null
+        Tool click-target ([int]$w[0] - 400) ([int]$w[1] - 300) | Out-Null
+        [void](Wait-Until { -not (Read-State $run).overflow.open } 3000)
     }
     Write-Settings '{ }'
     [void](Wait-Until { Test-Icons { param($i) $i.placement -eq "Tray" } } 5000)

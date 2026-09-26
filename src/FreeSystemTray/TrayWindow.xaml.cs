@@ -675,16 +675,31 @@ namespace FreeSystemTray
             exit.Click += (_, _) => Close();
             menu.Items.Add(exit);
 
+            OpenMenu(menu, "App menu", open => _appMenuOpen = open);
+        }
+
+        /// <summary>
+        /// Opens one of the tray's own menus so that it gets the keyboard (Esc, arrows): the tray never
+        /// activates by itself (WS_EX_NOACTIVATE), so the tray window takes the foreground, as Explorer's
+        /// taskbar does for its menus. It must do so before the menu opens: taking the foreground once
+        /// the menu is open, with any window but the one the menu belongs to (its own popup window, the
+        /// tray window for a menu in the flyout or one opened from FreeSystemTray's icon), makes WPF close
+        /// the menu at once.
+        /// </summary>
+        private void OpenMenu(ContextMenu menu, string what, Action<bool> setOpen)
+        {
             menu.Opened += (_, _) =>
             {
-                _appMenuOpen = true;
-                // The tray never activates by itself (WS_EX_NOACTIVATE), so without this the menu gets
-                // no keyboard input (Esc, arrows). Explorer's taskbar menus take the foreground the same way.
-                IntPtr popup = PresentationSource.FromVisual(menu) is HwndSource source ? source.Handle : IntPtr.Zero;
-                NativeMethods.SetForegroundWindow(popup != IntPtr.Zero ? popup : _hwnd);
+                setOpen(true);
                 menu.Focus();
+                AppLog.Write($"{what} opened");
             };
-            menu.Closed += (_, _) => _appMenuOpen = false;
+            menu.Closed += (_, _) =>
+            {
+                setOpen(false);
+                AppLog.Write($"{what} closed");
+            };
+            NativeMethods.SetForegroundWindow(_hwnd);
             menu.IsOpen = true;
         }
 
@@ -836,15 +851,7 @@ namespace FreeSystemTray
             var rename = new MenuItem { Header = "_Name and tooltip…" };
             rename.Click += (_, _) => OpenSettings?.Invoke(item.Key);
             menu.Items.Add(rename);
-            menu.Opened += (_, _) =>
-            {
-                _iconMenuOpen = true;
-                NativeMethods.SetForegroundWindow(_hwnd); // keyboard for the menu, as for the grip's
-                menu.Focus();
-            };
-            menu.Closed += (_, _) => _iconMenuOpen = false;
-            menu.IsOpen = true;
-            AppLog.Write($"Icon menu opened for {item}");
+            OpenMenu(menu, $"Icon menu for {item}", open => _iconMenuOpen = open);
         }
 
         private void AddPlacementItem(ContextMenu menu, IconItem item, IconPlacement? placement, string header, bool isChecked)
