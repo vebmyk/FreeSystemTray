@@ -98,6 +98,9 @@ namespace FreeSystemTray.TrayHost
         /// </summary>
         private readonly Dictionary<NotifyIcon, bool> _showTip = new(ReferenceEqualityComparer.Instance);
 
+        /// <summary>GUID icons whose window no longer exists, and since when (they get a grace period).</summary>
+        private readonly Dictionary<NotifyIcon, long> _deadSince = new(ReferenceEqualityComparer.Instance);
+
         public ManagedShellTrayHost(TrayHostOptions? options = null)
         {
             _options = options ?? new TrayHostOptions();
@@ -806,6 +809,9 @@ namespace FreeSystemTray.TrayHost
         /// <summary>Explorer's taskbar has this long to collect the apps' icons after it (re)starts, before it gets ours.</summary>
         private const int RecoverAfterSeconds = 4;
 
+        /// <summary>How long a GUID icon whose window no longer exists is kept, in case it comes back.</summary>
+        private static readonly TimeSpan DeadGuidIconGrace = TimeSpan.FromSeconds(10);
+
         /// <summary>A read of Explorer's tray: which taskbar, its buttons (null if it could not be read), and when.</summary>
         private sealed record ExplorerRead(IntPtr Explorer, List<ExplorerTrayButton>? Buttons, long StartedAt, long EndedAt);
 
@@ -963,13 +969,35 @@ namespace FreeSystemTray.TrayHost
 
         /// <summary>
         /// Removes our icons whose window no longer exists (the app crashed or was killed without
-        /// deleting its icon). ManagedShell does this only when the pointer passes over one, as Explorer does.
+        /// deleting its icon). ManagedShell does this only when the pointer passes over one, as Explorer
+        /// does. An icon with a GUID gets a grace period: when its app starts again, or Explorer does (its
+        /// own icons: volume, network, ...), it registers the same GUID from a new window, and the icon is
+        /// updated where it is instead of coming back at the end.
         /// </summary>
         private void RemoveDeadIcons()
         {
-            List<NotifyIcon> dead = _shell.NotificationArea.TrayIcons.Where(ni => !NativeMethods.IsWindow(ni.HWnd)).ToList();
+            long now = Stopwatch.GetTimestamp();
+            var dead = new List<NotifyIcon>();
+            foreach (NotifyIcon ni in _shell.NotificationArea.TrayIcons)
+            {
+                if (NativeMethods.IsWindow(ni.HWnd))
+                {
+                    _deadSince.Remove(ni);
+                    continue;
+                }
+                if (ni.GUID != Guid.Empty)
+                {
+                    if (!_deadSince.TryGetValue(ni, out long since)) _deadSince[ni] = since = now;
+                    if (Stopwatch.GetElapsedTime(since, now) < DeadGuidIconGrace) continue;
+                }
+                dead.Add(ni);
+            }
             if (dead.Count == 0) return;
-            foreach (NotifyIcon ni in dead) _shell.NotificationArea.TrayIcons.Remove(ni);
+            foreach (NotifyIcon ni in dead)
+            {
+                _deadSince.Remove(ni);
+                _shell.NotificationArea.TrayIcons.Remove(ni);
+            }
             Log($"Removed {dead.Count} icon(s) whose window no longer exists: {string.Join(", ", dead.Select(ni => $"'{ni.Title}'"))}");
         }
 
@@ -1039,6 +1067,7 @@ namespace FreeSystemTray.TrayHost
                     icon.Detach();
                     _icons.RemoveAt(i);
                     _showTip.Remove(icon.Source);
+                    _deadSince.Remove(icon.Source);
                 }
             }
 
