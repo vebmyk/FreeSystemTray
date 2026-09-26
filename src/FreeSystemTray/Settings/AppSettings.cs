@@ -129,8 +129,8 @@ namespace FreeSystemTray.Settings
             FilePath = path;
         }
 
-        public static string DefaultPath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FreeSystemTray", "settings.json");
+        /// <summary>settings.json in <see cref="AppPaths.DataDirectory"/> (next to the exe in a portable copy).</summary>
+        public static string DefaultPath => Path.Combine(AppPaths.DataDirectory, "settings.json");
 
         public string FilePath { get; }
 

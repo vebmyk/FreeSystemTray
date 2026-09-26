@@ -53,10 +53,15 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tests\smoke\Invoke-SmokeTest.ps1
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File tests\smoke\Invoke-SmokeTest.ps1 -AppPath dist\FreeSystemTray-0.1.0-win-x64\FreeSystemTray.exe
+  Tests a published build (tools\Publish.ps1); the test apps come from the -Configuration build.
 #>
 param(
     [string]$OutDir = (Join-Path $env:TEMP ("FreeSystemTray-smoke-" + (Get-Date -Format "yyyyMMdd-HHmmss"))),
     [string]$Configuration = "Debug",
+    [string]$AppPath,
     [switch]$SkipBuild,
     [switch]$SkipMouse
 )
@@ -64,7 +69,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $tfm = "net10.0-windows"
-$app = Join-Path $root "src\FreeSystemTray\bin\$Configuration\$tfm\FreeSystemTray.exe"
+$app = if ($AppPath) { (Resolve-Path $AppPath).Path } else { Join-Path $root "src\FreeSystemTray\bin\$Configuration\$tfm\FreeSystemTray.exe" }
 $testApp = Join-Path $root "spike\TestTrayApp\bin\$Configuration\$tfm\TestTrayApp.exe"
 $tool = Join-Path $root "spike\SpikeTool\bin\$Configuration\$tfm\SpikeTool.exe"
 $chevronGuid = "964b6542-bbad-44ee-848a-3a95d85951ea"

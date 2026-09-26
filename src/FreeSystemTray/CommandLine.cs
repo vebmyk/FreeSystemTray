@@ -138,7 +138,6 @@ namespace FreeSystemTray
         }
 
         /// <summary>Where logs go: --diag, then --log-dir, then the default.</summary>
-        public string EffectiveLogDir => DiagDir ?? LogDir ?? System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FreeSystemTray", "logs");
+        public string EffectiveLogDir => DiagDir ?? LogDir ?? System.IO.Path.Combine(AppPaths.DataDirectory, "logs");
     }
 }

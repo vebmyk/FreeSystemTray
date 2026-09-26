@@ -47,6 +47,7 @@ namespace FreeSystemTray
             AppLog.Init(Path.Combine(logDir, "FreeSystemTray.log"));
             AppLog.Write($"FreeSystemTray {Version} starting (pid {Environment.ProcessId}). Args: {string.Join(" ", e.Args)}");
             AppLog.Write($"OS: {WindowsVersion()}");
+            if (AppPaths.IsPortable) AppLog.Write($"Portable: settings, themes and logs are in {AppPaths.DataDirectory}");
 
             if (_options.Exit)
             {
