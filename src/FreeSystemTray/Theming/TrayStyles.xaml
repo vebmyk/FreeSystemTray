@@ -1,7 +1,76 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- The tray's styles. They take their values from the theme's resources (ThemeResources), so a
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:FreeSystemTray"
+                    xmlns:icons="clr-namespace:FreeSystemTray.Icons"
+                    xmlns:scaling="clr-namespace:FreeSystemTray.Scaling">
+    <!-- The tray's styles and templates, shared by the tray window and its hidden-icons flyout. They
+         take their values from the theme's resources (ThemeResources) and the sizes set in code, so a
          theme's XAML dictionary, merged after both, can override a value or a whole style. -->
+
+    <!-- One tray icon. Its cell sends the pointer's moves and clicks to the icon's app. -->
+    <DataTemplate DataType="{x:Type icons:IconItem}">
+        <local:IconCell x:Name="Cell"
+                        Width="{DynamicResource CellSize}"
+                        Height="{DynamicResource CellSize}"
+                        Background="Transparent"
+                        CornerRadius="{DynamicResource Icon.HighlightCornerRadius}"
+                        ToolTip="{Binding ToolTip}">
+            <scaling:ScaledIcon x:Name="Image"
+                                Source="{Binding Image}"
+                                IconId="{Binding Id}"
+                                OwnerPath="{Binding OwnerPath}"
+                                Width="{DynamicResource IconSize}"
+                                Height="{DynamicResource IconSize}" />
+        </local:IconCell>
+        <DataTemplate.Triggers>
+            <Trigger SourceName="Cell" Property="IsMouseOver" Value="True">
+                <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.HoverBrush}" />
+            </Trigger>
+            <!-- After the hover trigger, so it wins while both apply. -->
+            <Trigger SourceName="Cell" Property="local:CellState.IsPressed" Value="True">
+                <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.PressedBrush}" />
+            </Trigger>
+            <DataTrigger Binding="{Binding IsDragged}" Value="True">
+                <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.PressedBrush}" />
+                <Setter TargetName="Image" Property="Opacity" Value="0.6" />
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <!-- The chevron that opens the hidden-icons flyout, pointing to where it opens. -->
+    <DataTemplate DataType="{x:Type local:ChevronItem}">
+        <local:ChevronCell x:Name="Cell"
+                           Width="{DynamicResource CellSize}"
+                           Height="{DynamicResource CellSize}"
+                           Background="Transparent"
+                           CornerRadius="{DynamicResource Icon.HighlightCornerRadius}"
+                           ToolTip="Hidden icons">
+            <Path Data="M 0,5 L 5,0 L 10,5"
+                  Stroke="{DynamicResource Tray.Foreground}"
+                  StrokeThickness="{DynamicResource Chevron.Stroke}"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                  Width="{DynamicResource Chevron.Width}"
+                  Height="{DynamicResource Chevron.Height}"
+                  Stretch="Fill"
+                  RenderTransformOrigin="0.5,0.5">
+                <Path.RenderTransform>
+                    <RotateTransform Angle="{Binding Angle}" />
+                </Path.RenderTransform>
+            </Path>
+        </local:ChevronCell>
+        <DataTemplate.Triggers>
+            <!-- A collapsed cell takes no place in the icon panel. -->
+            <DataTrigger Binding="{Binding IsShown}" Value="False">
+                <Setter TargetName="Cell" Property="Visibility" Value="Collapsed" />
+            </DataTrigger>
+            <Trigger SourceName="Cell" Property="IsMouseOver" Value="True">
+                <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.HoverBrush}" />
+            </Trigger>
+            <Trigger SourceName="Cell" Property="local:CellState.IsPressed" Value="True">
+                <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.PressedBrush}" />
+            </Trigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
 
     <!-- Tooltips of the tray's icons. -->
     <Style TargetType="ToolTip">

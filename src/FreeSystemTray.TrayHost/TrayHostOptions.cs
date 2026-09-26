@@ -23,6 +23,12 @@ namespace FreeSystemTray.TrayHost
         /// </summary>
         public bool RoutePositionQueries { get; init; } = true;
 
+        /// <summary>
+        /// Keep <see cref="ITrayIcon.ExplorerPlacement"/> up to date by reading Explorer's tray after
+        /// icons change and every few seconds (on a background thread).
+        /// </summary>
+        public bool ReadExplorerTray { get; init; } = true;
+
         /// <summary>Log every icon message and position query (verbose, for diagnostics).</summary>
         public bool TraceMessages { get; init; }
 

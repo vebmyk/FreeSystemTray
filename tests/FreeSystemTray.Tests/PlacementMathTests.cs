@@ -135,5 +135,39 @@ namespace FreeSystemTray.Tests
             var saved = new SavedPosition(-800, 40, Corner.TopLeft);
             Assert.Equal(new PixelRect(0, 40, 402, 70), PlacementMath.Place(saved, Tray, new[] { Primary }));
         }
+
+        private static readonly PixelRect WorkArea = new(0, 0, 1920, 1040);
+
+        [Fact]
+        public void The_flyout_opens_above_a_tray_at_the_bottom_centred_on_the_chevron()
+        {
+            var tray = new PixelRect(1000, 998, 1400, 1028);
+            var chevron = new PixelRect(1200, 1001, 1224, 1025);
+            Assert.Equal(new PixelRect(1172, 914, 1252, 994), PlacementMath.FlyoutRect(tray, chevron, ScreenEdge.Bottom, new PixelSize(80, 80), WorkArea, 4));
+        }
+
+        [Fact]
+        public void The_flyout_does_not_reach_past_the_end_of_the_tray()
+        {
+            // The chevron at the tray's right end: the flyout ends where the tray does.
+            var tray = new PixelRect(1554, 998, 1908, 1028);
+            var chevron = new PixelRect(1880, 1001, 1904, 1025);
+            Assert.Equal(new PixelRect(1852, 962, 1908, 994), PlacementMath.FlyoutRect(tray, chevron, ScreenEdge.Bottom, new PixelSize(56, 32), WorkArea, 4));
+            // Longer than the tray: centred, and inside the work area.
+            Assert.Equal(new PixelRect(1420, 962, 1920, 994), PlacementMath.FlyoutRect(tray, chevron, ScreenEdge.Bottom, new PixelSize(500, 32), WorkArea, 4));
+        }
+
+        [Theory]
+        [InlineData(ScreenEdge.Top, 1172, 1032)]
+        [InlineData(ScreenEdge.Left, 1404, 948)]
+        [InlineData(ScreenEdge.Right, 916, 948)]
+        public void The_flyout_opens_on_the_side_away_from_the_trays_edge(ScreenEdge edge, int left, int top)
+        {
+            var tray = new PixelRect(1000, 500, 1400, 1028);
+            var chevron = new PixelRect(1200, 1001, 1224, 1025);
+            var workArea = new PixelRect(0, 0, 1920, 1200);
+            PixelRect r = PlacementMath.FlyoutRect(tray, chevron, edge, new PixelSize(80, 80), workArea, 4);
+            Assert.Equal((left, top), (r.Left, r.Top));
+        }
     }
 }

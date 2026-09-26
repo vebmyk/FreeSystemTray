@@ -1,0 +1,33 @@
+<Window x:Class="FreeSystemTray.OverflowWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:FreeSystemTray"
+        Title="FreeSystemTray hidden icons"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        AllowsTransparency="True"
+        Background="Transparent"
+        UseLayoutRounding="True">
+    <!-- The hidden-icons flyout: the icons in IconModel.Overflow in a grid, next to the tray's
+         chevron. Like the tray window it never activates, sizes itself around its content, and draws
+         its background itself. It shares the tray window's resources (sizes, theme, templates). -->
+    <local:ContentSizeHost x:Name="ContentHost">
+        <Border Background="{DynamicResource Tray.Background}"
+                BorderBrush="{DynamicResource Tray.BorderBrush}"
+                BorderThickness="{DynamicResource TrayBorder}"
+                CornerRadius="{DynamicResource Tray.CornerRadius}">
+            <ItemsControl x:Name="IconList" Margin="{DynamicResource OverflowPadding}" MinWidth="{DynamicResource CellSize}" MinHeight="{DynamicResource CellSize}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <local:IconPanel Layout="Grid"
+                                         Columns="{Binding Columns, RelativeSource={RelativeSource AncestorType=local:OverflowWindow}}"
+                                         Spacing="{DynamicResource Icons.Spacing}" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+            </ItemsControl>
+        </Border>
+    </local:ContentSizeHost>
+</Window>

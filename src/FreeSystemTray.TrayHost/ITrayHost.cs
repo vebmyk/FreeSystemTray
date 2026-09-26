@@ -28,6 +28,12 @@ namespace FreeSystemTray.TrayHost
         void SetTrayWindowBounds(PixelRect bounds, ScreenEdge edge);
 
         /// <summary>
+        /// Where the tray's hidden-icons flyout is while it is open, empty while it is closed. The
+        /// pointer on it counts as on the tray window when apps ask where their icon is.
+        /// </summary>
+        void SetOverflowBounds(PixelRect bounds);
+
+        /// <summary>
         /// Whether the tray window is shown. While it is hidden, Explorer answers icon- and
         /// taskbar-position queries, so menus and flyouts open at the taskbar; icons keep registering.
         /// </summary>
@@ -40,10 +46,23 @@ namespace FreeSystemTray.TrayHost
     {
         /// <summary>Stable identity: the GUID if the app supplied one, else "exe path:uID".</summary>
         string Id { get; }
+
+        /// <summary>The GUID the app identifies the icon with, or <see cref="Guid.Empty"/> if it uses its window and <see cref="Uid"/>.</summary>
+        Guid Guid { get; }
+
+        /// <summary>The app's number for the icon (uID), unique among its window's icons.</summary>
+        uint Uid { get; }
+
         ImageSource? Image { get; }
         string? ToolTip { get; }
+
+        /// <summary>The app has hidden its icon (NIS_HIDDEN).</summary>
         bool IsHidden { get; }
+
         string? OwnerPath { get; }
+
+        /// <summary>Where Explorer's own tray shows this icon, as last read; it can change at any time.</summary>
+        ExplorerPlacement ExplorerPlacement { get; }
 
         /// <summary>Screen rectangle of the icon in physical pixels, for Shell_NotifyIconGetRect.</summary>
         void SetScreenBounds(PixelRect bounds);
@@ -53,6 +72,25 @@ namespace FreeSystemTray.TrayHost
         void OnMouseMove();
         void OnMouseDown(MouseButton button);
         void OnMouseUp(MouseButton button);
+    }
+
+    /// <summary>Where Explorer's own tray shows an icon.</summary>
+    public enum ExplorerPlacement
+    {
+        /// <summary>Not known: Explorer's tray could not be read, or it has no such icon.</summary>
+        Unknown,
+
+        /// <summary>On the taskbar.</summary>
+        Taskbar,
+
+        /// <summary>In the hidden-icons flyout.</summary>
+        Overflow,
+
+        /// <summary>
+        /// Nowhere, although the app has not hidden it: Windows hides it, as it does Meet Now while that
+        /// is turned off in "Turn system icons on or off".
+        /// </summary>
+        Hidden
     }
 
     /// <summary>Same values as ABE_LEFT..ABE_BOTTOM.</summary>

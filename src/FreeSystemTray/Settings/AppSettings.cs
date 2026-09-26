@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FreeSystemTray.Icons;
 using FreeSystemTray.Placement;
 using FreeSystemTray.Scaling;
 using FreeSystemTray.ShowHide;
@@ -31,6 +32,12 @@ namespace FreeSystemTray.Settings
 
         /// <summary>The theme's id: its file name without ".json", in the themes folder next to this file or among the built-in ones.</summary>
         public string Theme { get; set; } = ThemeStore.DefaultId;
+
+        /// <summary>Which icons are shown where and in what order, and per-icon labels and tooltips.</summary>
+        public IconSettings Icons { get; set; } = new();
+
+        /// <summary>Show FreeSystemTray's own icon, with its menu and settings, in the tray (and in Explorer's).</summary>
+        public bool AppIcon { get; set; } = true;
     }
 
     /// <summary>
@@ -166,6 +173,9 @@ namespace FreeSystemTray.Settings
             }
         }
 
+        /// <summary>A deep copy, through JSON.</summary>
+        public static AppSettings Clone(AppSettings settings) => Parse(JsonSerializer.Serialize(settings, JsonOptions));
+
         /// <summary>Writes the settings atomically (temporary file, then replace).</summary>
         public void Save(AppSettings settings)
         {
@@ -185,6 +195,12 @@ namespace FreeSystemTray.Settings
             settings.Scaling.IconSize ??= "100%";
             settings.Scaling.TraySize ??= "100%";
             settings.Scaling.ExeIcons ??= new List<string>();
+            settings.Icons ??= new IconSettings();
+            settings.Icons.Rules ??= new List<IconRule>();
+            settings.Icons.Rules.RemoveAll(r => r == null);
+            foreach (IconRule rule in settings.Icons.Rules) rule.Match ??= "";
+            settings.Icons.Order ??= new List<string>();
+            settings.Icons.Order.RemoveAll(string.IsNullOrWhiteSpace);
             if (string.IsNullOrWhiteSpace(settings.Theme)) settings.Theme = ThemeStore.DefaultId;
             return settings;
         }

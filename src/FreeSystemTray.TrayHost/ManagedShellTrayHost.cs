@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using FreeSystemTray.TrayHost.Interop;
@@ -29,6 +30,8 @@ namespace FreeSystemTray.TrayHost
     /// start in it; otherwise Explorer answers, so its own tray keeps opening flyouts at the taskbar.</item>
     /// <item>Explorer's taskbar gets back the always-on-top flag ManagedShell takes away.</item>
     /// </list>
+    /// It also reads Explorer's own tray now and then, to tell where Explorer shows each icon
+    /// (<see cref="ITrayIcon.ExplorerPlacement"/>).
     /// Threading: icon messages are sent messages, so any wait inside ManagedShell's handlers lets
     /// another one run in the middle and ManagedShell drops it (FINDINGS.md, "Other findings" 1).
     /// ManagedShell's collection changes therefore reach our collection through BeginInvoke, and
@@ -37,6 +40,9 @@ namespace FreeSystemTray.TrayHost
     public sealed class ManagedShellTrayHost : ITrayHost
     {
         private const uint ExplorerTimeoutMs = 1000;
+
+        /// <summary>How often Explorer's tray is read when nothing else asks for it: Explorer moves icons by itself.</summary>
+        private const int ExplorerReadEveryTicks = 6; // of the 500 ms monitor
 
         private readonly TrayHostOptions _options;
         private readonly ShellManager _shell;
@@ -51,12 +57,18 @@ namespace FreeSystemTray.TrayHost
         private bool _disposed;
         private bool _syncQueued;
         private PixelRect _trayBounds;
+        private PixelRect _overflowBounds;
         private ScreenEdge _trayEdge = ScreenEdge.Bottom;
         private long _lastInteraction;
         private bool? _lastHoldsRole;
         private IntPtr _lastExplorerTray;
         private bool? _lastExplorerTopmost;
         private bool _explorerTopmostRestored;
+        private readonly DispatcherTimer _explorerReadDelay;
+        private bool _explorerReadRunning;
+        private bool _explorerReadAgain;
+        private int _ticksSinceExplorerRead;
+        private bool? _explorerReadable;
 
         public ManagedShellTrayHost(TrayHostOptions? options = null)
         {
@@ -82,6 +94,14 @@ namespace FreeSystemTray.TrayHost
             Icons = new ReadOnlyObservableCollection<ITrayIcon>(_icons);
             _monitor = new DispatcherTimer(DispatcherPriority.Background, _dispatcher) { Interval = TimeSpan.FromMilliseconds(500) };
             _monitor.Tick += Monitor_Tick;
+            // Explorer handles a mirrored message before we get to update our icons; a short pause
+            // also lets a burst of icon changes (TaskbarCreated) end in one read.
+            _explorerReadDelay = new DispatcherTimer(DispatcherPriority.Background, _dispatcher) { Interval = TimeSpan.FromMilliseconds(300) };
+            _explorerReadDelay.Tick += (_, _) =>
+            {
+                _explorerReadDelay.Stop();
+                StartExplorerRead();
+            };
         }
 
         public ReadOnlyObservableCollection<ITrayIcon> Icons { get; }
@@ -141,6 +161,8 @@ namespace FreeSystemTray.TrayHost
                 rc = new MsNative.Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom)
             });
         }
+
+        public void SetOverflowBounds(PixelRect bounds) => _overflowBounds = bounds;
 
         /// <summary>Called by icons when a mouse button is pressed or released on them in the tray window.</summary>
         internal void NoteInteraction() => _lastInteraction = Stopwatch.GetTimestamp();
@@ -503,7 +525,7 @@ namespace FreeSystemTray.TrayHost
             var cursor = new PixelPoint(pt.X, pt.Y);
             bool overExplorer = ExplorerTaskbar.IsOverExplorerTray(cursor, _trayHwnd);
             TimeSpan? since = _lastInteraction == 0 ? null : Stopwatch.GetElapsedTime(_lastInteraction);
-            bool ours = PositionQueryRouting.AnswerWithTrayWindow(TrayWindowVisible, _trayBounds, cursor, overExplorer, since);
+            bool ours = PositionQueryRouting.AnswerWithTrayWindow(TrayWindowVisible, _trayBounds, _overflowBounds, cursor, overExplorer, since);
             why = $"cursor {cursor.X},{cursor.Y}{(overExplorer ? " over Explorer's tray" : "")}, last tray input " +
                   (since is TimeSpan t ? $"{t.TotalMilliseconds:0} ms ago" : "never");
             return ours;
@@ -587,6 +609,75 @@ namespace FreeSystemTray.TrayHost
                 else if (topmost == false) Log("Explorer's taskbar is not always-on-top (Explorer does this while a full-screen app is in front)");
                 _lastExplorerTopmost = topmost;
             }
+
+            if (++_ticksSinceExplorerRead >= ExplorerReadEveryTicks) StartExplorerRead();
+        }
+
+        #endregion
+
+        #region Explorer's own tray: where it shows each icon
+
+        /// <summary>Reads Explorer's tray soon. Never waits: it can be called while ManagedShell handles a tray message.</summary>
+        internal void RequestExplorerRead()
+        {
+            if (!_options.ReadExplorerTray || _disposed) return;
+            _explorerReadDelay.Stop();
+            _explorerReadDelay.Start();
+        }
+
+        /// <summary>
+        /// Reading Explorer's tray sends messages to Explorer and waits for them, so it runs on a
+        /// thread-pool thread; tray messages would otherwise run in the middle of the wait.
+        /// </summary>
+        private void StartExplorerRead()
+        {
+            if (!_options.ReadExplorerTray || _disposed || !_started) return;
+            _ticksSinceExplorerRead = 0;
+            if (_explorerReadRunning)
+            {
+                _explorerReadAgain = true;
+                return;
+            }
+            _explorerReadRunning = true;
+            IntPtr explorer = ExplorerTaskbar.Find(_trayHwnd);
+            Task.Run(() =>
+            {
+                List<ExplorerTrayButton>? buttons = null;
+                try
+                {
+                    buttons = ExplorerTrayIcons.Read(explorer);
+                }
+                catch (Exception ex)
+                {
+                    _dispatcher.BeginInvoke(DispatcherPriority.Background, () => Log("Reading Explorer's tray failed: " + ex.Message));
+                }
+                _dispatcher.BeginInvoke(DispatcherPriority.Background, () => ApplyExplorerRead(buttons));
+            });
+        }
+
+        private void ApplyExplorerRead(List<ExplorerTrayButton>? buttons)
+        {
+            _explorerReadRunning = false;
+            if (_disposed) return;
+            if (_explorerReadable != (buttons != null))
+            {
+                _explorerReadable = buttons != null;
+                Log(buttons != null ? $"Reading Explorer's tray: {buttons.Count} buttons, {buttons.Count(b => b.Hidden)} of them hidden"
+                    : "Explorer's tray cannot be read; where it shows icons is unknown");
+            }
+            foreach (ManagedShellTrayIcon icon in _icons.OfType<ManagedShellTrayIcon>())
+            {
+                NotifyIcon ni = icon.Source;
+                ExplorerPlacement placement = buttons == null ? ExplorerPlacement.Unknown : ExplorerTrayIcons.PlacementOf(buttons, ni.HWnd, ni.UID, ni.GUID);
+                if (placement != icon.ExplorerPlacement && _options.TraceMessages)
+                    Log($"EXPLORER shows '{ni.Title}' ({icon.Id}): {placement}");
+                icon.SetExplorerPlacement(placement);
+            }
+            if (_explorerReadAgain)
+            {
+                _explorerReadAgain = false;
+                StartExplorerRead();
+            }
         }
 
         #endregion
@@ -628,6 +719,7 @@ namespace FreeSystemTray.TrayHost
                 if (at >= 0) _icons.Move(at, i);
                 else _icons.Insert(i, new ManagedShellTrayIcon(source[i], this));
             }
+            RequestExplorerRead();
         }
 
         private int IndexOf(NotifyIcon ni)
@@ -659,6 +751,7 @@ namespace FreeSystemTray.TrayHost
             if (_disposed) return;
             _disposed = true;
             _monitor.Stop();
+            _explorerReadDelay.Stop();
 
             if (_started)
             {

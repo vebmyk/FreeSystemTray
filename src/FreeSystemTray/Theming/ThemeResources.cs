@@ -10,7 +10,7 @@ namespace FreeSystemTray.Theming
     /// A theme's colours and tooltip settings as WPF resources. These keys are what a theme's XAML
     /// dictionary can override (README, "Themes"):
     /// <list type="bullet">
-    /// <item>Brushes: Tray.Background, Tray.BorderBrush, Tray.GripBrush, Icon.HoverBrush, Icon.PressedBrush,
+    /// <item>Brushes: Tray.Background, Tray.Foreground, Tray.BorderBrush, Tray.GripBrush, Icon.HoverBrush, Icon.PressedBrush,
     /// ToolTip.Background, ToolTip.Foreground, ToolTip.BorderBrush.</item>
     /// <item>ToolTip.BorderThickness and ToolTip.Padding (Thickness), ToolTip.CornerRadius (CornerRadius),
     /// ToolTip.FontFamily (FontFamily), ToolTip.FontSize (double).</item>
@@ -32,6 +32,7 @@ namespace FreeSystemTray.Theming
             return new ResourceDictionary
             {
                 ["Tray.Background"] = Brush(background),
+                ["Tray.Foreground"] = Brush(t.Foreground),
                 ["Tray.BorderBrush"] = Brush(t.BorderColor),
                 ["Tray.GripBrush"] = Brush(t.GripColor),
                 ["Icon.HoverBrush"] = Brush(t.HoverColor),

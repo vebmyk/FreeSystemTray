@@ -487,13 +487,13 @@ namespace FreeSystemTray.ShowHide
             return pid == _pid;
         }
 
-        private static bool IsOpenMenu(IntPtr hwnd) => NativeMethods.IsWindow(hwnd) && NativeMethods.IsWindowVisible(hwnd);
+        internal static bool IsOpenMenu(IntPtr hwnd) => NativeMethods.IsWindow(hwnd) && NativeMethods.IsWindowVisible(hwnd);
 
         /// <summary>
         /// A menu or flyout rather than an app's main window: shown, not cloaked, and always-on-top.
         /// Windows 10's volume, network and power flyouts and apps' popup menus are all topmost.
         /// </summary>
-        private static bool IsPopup(IntPtr hwnd)
+        internal static bool IsPopup(IntPtr hwnd)
         {
             if (!NativeMethods.IsWindowVisible(hwnd)) return false;
             if (NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0) return false;

@@ -46,6 +46,10 @@ namespace FreeSystemTray.Theming
     {
         public string? Name { get; set; }
         public string? BasedOn { get; set; }
+
+        /// <summary>The colour of what the tray draws itself, such as the hidden-icons chevron.</summary>
+        public string? Foreground { get; set; }
+
         public BackgroundPart? Background { get; set; }
         public BorderPart? Border { get; set; }
         public GripPart? Grip { get; set; }
@@ -107,6 +111,8 @@ namespace FreeSystemTray.Theming
         public string Id { get; init; } = "Dark";
         public string Name { get; init; } = "Dark";
 
+        public Color Foreground { get; init; } = Color.FromRgb(0xE0, 0xE0, 0xE0);
+
         public Color Background { get; init; } = Color.FromRgb(0x2B, 0x2B, 0x2B);
         public double BackgroundOpacity { get; init; } = 1;
         public TrayBlur Blur { get; init; } = TrayBlur.None;
@@ -154,6 +160,7 @@ namespace FreeSystemTray.Theming
         public Theme With(ThemeFile file, string id, string? directory, List<string> problems)
         {
             Theme t = this with { Id = id, Name = string.IsNullOrWhiteSpace(file.Name) ? id : file.Name.Trim() };
+            t = t with { Foreground = ParseColor(file.Foreground, t.Foreground, "foreground", problems) };
             if (file.Background is { } bg)
             {
                 t = t with
@@ -216,6 +223,7 @@ namespace FreeSystemTray.Theming
         public ThemeFile ToFile() => new()
         {
             Name = Name,
+            Foreground = Format(Foreground),
             Background = new() { Color = Format(Background), Opacity = BackgroundOpacity, Blur = Blur },
             Border = new() { Color = Format(BorderColor), Thickness = BorderThickness, CornerRadius = CornerRadius },
             Grip = new() { Color = Format(GripColor), Size = GripSize, Position = GripPosition },

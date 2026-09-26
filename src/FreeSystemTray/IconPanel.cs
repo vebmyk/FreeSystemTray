@@ -7,8 +7,8 @@ namespace FreeSystemTray
 {
     /// <summary>
     /// Lays out the icon cells in a row, a column, or rows of a fixed number of columns, with a gap
-    /// between cells. Every cell gets the size of the largest one. Hidden (collapsed) icons take no
-    /// place.
+    /// between cells. Every cell gets the size of the largest one. Collapsed children, and children
+    /// whose content is collapsed (no size), take no place.
     /// </summary>
     public sealed class IconPanel : Panel
     {
@@ -63,7 +63,7 @@ namespace FreeSystemTray
             foreach (UIElement child in InternalChildren)
             {
                 child.Measure(infinite);
-                if (child.Visibility == Visibility.Collapsed) continue;
+                if (TakesNoPlace(child)) continue;
                 w = Math.Max(w, child.DesiredSize.Width);
                 h = Math.Max(h, child.DesiredSize.Height);
                 count++;
@@ -77,7 +77,7 @@ namespace FreeSystemTray
             int index = 0;
             foreach (UIElement child in InternalChildren)
             {
-                if (child.Visibility == Visibility.Collapsed)
+                if (TakesNoPlace(child))
                 {
                     child.Arrange(default);
                     continue;
@@ -87,6 +87,9 @@ namespace FreeSystemTray
             }
             return finalSize;
         }
+
+        private static bool TakesNoPlace(UIElement child) =>
+            child.Visibility == Visibility.Collapsed || (child.DesiredSize.Width <= 0 && child.DesiredSize.Height <= 0);
     }
 
     /// <summary>Whether a mouse button is down on an icon's cell, for the theme's "pressed" look.</summary>

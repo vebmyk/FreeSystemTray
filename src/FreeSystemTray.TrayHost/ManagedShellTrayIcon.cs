@@ -26,10 +26,22 @@ namespace FreeSystemTray.TrayHost
         public event PropertyChangedEventHandler? PropertyChanged;
 
         public string Id => Source.GUID != Guid.Empty ? Source.GUID.ToString() : $"{Source.Path}:{Source.UID}";
+        public Guid Guid => Source.GUID;
+        public uint Uid => Source.UID;
         public ImageSource? Image => Source.Icon;
         public string? ToolTip => Source.Title;
         public bool IsHidden => Source.IsHidden;
         public string? OwnerPath => Source.Path;
+
+        public ExplorerPlacement ExplorerPlacement { get; private set; }
+
+        /// <summary>Set by the host after it read Explorer's tray.</summary>
+        internal void SetExplorerPlacement(ExplorerPlacement placement)
+        {
+            if (placement == ExplorerPlacement) return;
+            ExplorerPlacement = placement;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ExplorerPlacement)));
+        }
 
         public void SetScreenBounds(PixelRect bounds)
         {
@@ -84,6 +96,8 @@ namespace FreeSystemTray.TrayHost
             };
             if (mapped != null)
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(mapped));
+            // The app hiding or showing its icon changes Explorer's tray too.
+            if (mapped == nameof(IsHidden)) _host.RequestExplorerRead();
         }
     }
 }

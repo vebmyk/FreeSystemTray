@@ -110,6 +110,30 @@ namespace FreeSystemTray.Placement
             return window.Offset(dx, dy);
         }
 
+        /// <summary>
+        /// Where a flyout of <paramref name="size"/> opens from the tray: beside the tray window, on
+        /// the side away from the screen edge the tray is nearest to (above a tray at the bottom),
+        /// <paramref name="gap"/> pixels from it, centred on the chevron along the tray but not past
+        /// the tray's ends (unless it is longer than the tray), and kept inside the work area.
+        /// </summary>
+        public static PixelRect FlyoutRect(PixelRect tray, PixelRect chevron, ScreenEdge trayEdge, PixelSize size, PixelRect workArea, int gap)
+        {
+            PixelPoint c = chevron.IsEmpty ? tray.Center : chevron.Center;
+            int x = Along(c.X - size.Width / 2, size.Width, tray.Left, tray.Right);
+            int y = Along(c.Y - size.Height / 2, size.Height, tray.Top, tray.Bottom);
+            PixelPoint topLeft = trayEdge switch
+            {
+                ScreenEdge.Top => new(x, tray.Bottom + gap),
+                ScreenEdge.Left => new(tray.Right + gap, y),
+                ScreenEdge.Right => new(tray.Left - gap - size.Width, y),
+                _ => new(x, tray.Top - gap - size.Height)
+            };
+            return KeepInside(PixelRect.FromPointAndSize(topLeft, size), workArea);
+        }
+
+        private static int Along(int start, int length, int min, int max) =>
+            length <= max - min ? Math.Clamp(start, min, max - length) : start;
+
         /// <summary>Keeps the window fully on the monitor it overlaps most, or the nearest one if it is off every monitor.</summary>
         public static PixelRect KeepOnScreen(PixelRect window, IReadOnlyList<MonitorInfo> monitors) =>
             monitors.Count == 0 ? window : KeepInside(window, MonitorFor(window, monitors).Bounds);

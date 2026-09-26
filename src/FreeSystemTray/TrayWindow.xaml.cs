@@ -6,11 +6,13 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Threading;
+using FreeSystemTray.Icons;
 using FreeSystemTray.Logging;
 using FreeSystemTray.Placement;
 using FreeSystemTray.Scaling;
@@ -26,8 +28,11 @@ namespace FreeSystemTray
     /// WS_EX_TOOLWINDOW), so it stays out of Alt+Tab and apps can still take the foreground for their
     /// menus. It sizes itself around the icons with its anchor corner fixed, and can be dragged by the
     /// grip on its left edge unless the position is locked. <see cref="ShowHide"/> shows and hides it.
+    /// It shows the icons the icon settings put in the tray (<see cref="IconModel"/>), then a chevron
+    /// that opens the others in the hidden-icons flyout (<see cref="OverflowWindow"/>). Icons can be
+    /// dragged to a new place, between the two as well.
     /// </summary>
-    public partial class TrayWindow : Window
+    public partial class TrayWindow : Window, IIconCellHost
     {
         public const string WindowTitle = "FreeSystemTray";
 
@@ -55,6 +60,11 @@ namespace FreeSystemTray
         private (int Width, int Height, int Radius) _region;
         private (bool AcrylicShown, bool BlurUnavailable) _background;
         private bool _transparency = WindowEffects.TransparencyEnabled();
+        private readonly IconModel _model;
+        private readonly ChevronItem _chevron = new();
+        private readonly OverflowWindow _overflow;
+        private IconDrag? _iconDrag;
+        private bool _iconMenuOpen;
 
         public TrayWindow(ITrayHost host, AppSettings settings, SettingsStore store, ThemeStore themes)
         {
@@ -65,9 +75,19 @@ namespace FreeSystemTray
             InitializeComponent();
             Title = WindowTitle;
 
+            _model = new IconModel(host, settings.Icons, Dispatcher);
+            IconCell.SetHost(this, this);
+            ChevronCell.SetToggle(this, () => ToggleOverflow("chevron"));
+            IconList.ItemsSource = new CompositeCollection { new CollectionContainer { Collection = _model.Tray }, _chevron };
+            _model.Tray.CollectionChanged += TrayIcons_CollectionChanged;
+            _model.Arranged += (_, _) => OnArranged();
+            _overflow = new OverflowWindow(this, host, _model, OverflowAnchor, AppLog.Write);
             LoadTheme();
-            IconList.ItemsSource = host.Icons;
-            ((INotifyCollectionChanged)host.Icons).CollectionChanged += Icons_CollectionChanged;
+            OnArranged();
+            IsVisibleChanged += (_, _) =>
+            {
+                if (!IsVisible) _overflow.CloseFlyout("the tray hid");
+            };
 
             ContentHost.ContentSizeChanged += (_, _) => QueuePlacement();
             SourceInitialized += TrayWindow_SourceInitialized;
@@ -83,8 +103,16 @@ namespace FreeSystemTray
         /// <summary>The screen edge the window is nearest to, as last reported to the host.</summary>
         public ScreenEdge Edge => _reportedEdge;
 
-        /// <summary>Each visible icon's bounds as last reported to the host, in physical pixels.</summary>
-        public IReadOnlyDictionary<ITrayIcon, PixelRect> IconBounds => _iconBounds;
+        /// <summary>Each shown icon's bounds as last reported to the host, in physical pixels: in the tray, or in the open flyout.</summary>
+        public IReadOnlyDictionary<ITrayIcon, PixelRect> IconBounds =>
+            _overflow.IconBounds.Count == 0 ? _iconBounds
+                : _iconBounds.Concat(_overflow.IconBounds).ToDictionary(p => p.Key, p => p.Value, (IEqualityComparer<ITrayIcon>)ReferenceEqualityComparer.Instance);
+
+        /// <summary>The icons, arranged by the icon settings.</summary>
+        internal IconModel Icons => _model;
+
+        /// <summary>The hidden-icons flyout.</summary>
+        internal OverflowWindow Overflow => _overflow;
 
         public IntPtr Handle => _hwnd;
 
@@ -94,8 +122,8 @@ namespace FreeSystemTray
         /// <summary>The element the slide animation moves.</summary>
         internal UIElement AnimatedContent => ContentHost;
 
-        /// <summary>The window is being dragged or its menu is open: auto-hide waits.</summary>
-        public bool IsBusy => _dragging || _gripMenuOpen;
+        /// <summary>The window or an icon is being dragged, or a menu of the tray or its flyout is open: auto-hide waits.</summary>
+        public bool IsBusy => _dragging || _gripMenuOpen || _iconMenuOpen || _iconDrag != null || _overflow.IsOpen;
 
         /// <summary>Lays the window out and places it before it is shown again: it may have changed size while hidden.</summary>
         internal void PrepareToShow()
@@ -149,6 +177,7 @@ namespace FreeSystemTray
             UpdateGrip();
             QueuePlacement();
             ShowHide?.ApplySettings(settings.ShowHide);
+            _model.ApplySettings(settings.Icons);
             LoadTheme();
         }
 
@@ -228,6 +257,11 @@ namespace FreeSystemTray
             Resources["IconListMargin"] = t.Layout == IconLayout.Column
                 ? new Thickness(layout.MarginAcross, layout.MarginAlong, layout.MarginAcross, layout.MarginAlong)
                 : new Thickness(layout.MarginAlong, layout.MarginAcross, layout.MarginAlong, layout.MarginAcross);
+            Resources["OverflowPadding"] = new Thickness(Math.Max(layout.MarginAlong, layout.MarginAcross));
+            // The chevron: 10 by 5 at an icon size of 16, drawn with a line 1/12 of the icon thick.
+            Resources["Chevron.Width"] = layout.IconSize * 0.625;
+            Resources["Chevron.Height"] = layout.IconSize * 0.3125;
+            Resources["Chevron.Stroke"] = Math.Max(1, layout.IconSize / 12);
             PlaceGrip(t.EffectiveGripPosition, layout);
             UpdateThemeDictionaries();
             UseLayoutRounding = s.SnapToPixels;
@@ -290,6 +324,13 @@ namespace FreeSystemTray
         /// </summary>
         private void UpdateWindowEffects()
         {
+            UpdateTrayEffects();
+            // The flyout shares the tray's brushes, so it needs the same blur (or none) behind it.
+            _overflow.SetEffects(_blurShown ? _blurKind : TrayBlur.None, ThemeResources.BackgroundColor(_theme), Layout.CornerRadius);
+        }
+
+        private void UpdateTrayEffects()
+        {
             if (_hwnd == IntPtr.Zero) return;
             bool blur = _theme.Blur != TrayBlur.None && !_effectsSuspended && _transparency;
             if (blur != _blurShown || _theme.Blur != _blurKind)
@@ -334,10 +375,18 @@ namespace FreeSystemTray
         }
 
         /// <summary>The element drawing an icon, if its cell exists (diagnostics).</summary>
-        internal ScaledIcon? IconElementOf(ITrayIcon icon) =>
-            IconList.ItemContainerGenerator.ContainerFromItem(icon) is DependencyObject container ? FindDescendant<ScaledIcon>(container) : null;
+        internal ScaledIcon? IconElementOf(ITrayIcon icon)
+        {
+            if (_model.ItemFor(icon) is not { } item) return null;
+            IconCell? cell = CellOf(item) ?? _overflow.CellOf(item);
+            return cell == null ? null : FindDescendant<ScaledIcon>(cell);
+        }
 
-        private static T? FindDescendant<T>(DependencyObject parent) where T : DependencyObject
+        /// <summary>The cell of an icon in the tray window, if it has one.</summary>
+        internal IconCell? CellOf(IconItem item) =>
+            IconList.ItemContainerGenerator.ContainerFromItem(item) is DependencyObject container ? FindDescendant<IconCell>(container) : null;
+
+        internal static T? FindDescendant<T>(DependencyObject parent) where T : DependencyObject
         {
             for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
             {
@@ -461,19 +510,20 @@ namespace FreeSystemTray
                 _reportedBounds = bounds;
                 _reportedEdge = edge;
                 _host.SetTrayWindowBounds(bounds, edge);
+                _chevron.Angle = ChevronItem.AngleFor(edge);
+                if (_overflow.IsOpen) _overflow.Place();
             }
             UpdateIconBounds();
         }
 
         private void UpdateIconBounds()
         {
-            DpiScale dpi = VisualTreeHelper.GetDpi(this);
-            foreach (ITrayIcon icon in _host.Icons)
+            foreach (IconItem item in _model.Tray)
             {
-                if (IconList.ItemContainerGenerator.ContainerFromItem(icon) is FrameworkElement cell && cell.IsVisible && cell.ActualWidth > 0)
-                    SetIconBounds(icon, ScreenBoundsOf(cell, dpi));
+                if (CellOf(item) is { IsVisible: true, ActualWidth: > 0 } cell)
+                    SetIconBounds(item.Icon, cell.ScreenBounds());
                 else
-                    _iconBounds.Remove(icon);
+                    _iconBounds.Remove(item.Icon);
             }
         }
 
@@ -484,19 +534,21 @@ namespace FreeSystemTray
             icon.SetScreenBounds(bounds);
         }
 
-        private static PixelRect ScreenBoundsOf(FrameworkElement element, DpiScale dpi)
+        /// <summary>An element's screen rectangle in physical pixels.</summary>
+        internal static PixelRect ScreenBoundsOf(FrameworkElement element)
         {
+            DpiScale dpi = VisualTreeHelper.GetDpi(element);
             Point p = element.PointToScreen(new Point(0, 0));
             return PixelRect.FromPointAndSize(
                 new PixelPoint((int)Math.Round(p.X), (int)Math.Round(p.Y)),
                 new PixelSize((int)Math.Round(element.ActualWidth * dpi.DpiScaleX), (int)Math.Round(element.ActualHeight * dpi.DpiScaleY)));
         }
 
-        private void Icons_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        private void TrayIcons_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
             if (e.OldItems != null)
             {
-                foreach (ITrayIcon icon in e.OldItems) _iconBounds.Remove(icon);
+                foreach (IconItem item in e.OldItems) _iconBounds.Remove(item.Icon);
             }
             QueueBoundsReport();
         }
@@ -514,6 +566,7 @@ namespace FreeSystemTray
             _dragStartBounds = new PixelRect(r.Left, r.Top, r.Right, r.Bottom);
             _dragMonitors = Monitors.GetAll();
             _dragging = _dragMonitors.Count > 0 && Grip.CaptureMouse();
+            if (_dragging) _overflow.CloseFlyout("the tray is being moved");
         }
 
         private void Grip_MouseMove(object sender, MouseEventArgs e)
@@ -657,49 +710,122 @@ namespace FreeSystemTray
 
         #endregion
 
-        #region Mouse routing to the icons' apps
+        #region Icons: the chevron, the hidden-icons flyout, dragging, the icon menu
 
-        private static ITrayIcon? IconOf(object sender) => (sender as FrameworkElement)?.DataContext as ITrayIcon;
+        bool IIconCellHost.IsDraggingIcon => _iconDrag != null;
 
-        private void Icon_MouseEnter(object sender, MouseEventArgs e)
-        {
-            if (IconOf(sender) is not { } icon || sender is not FrameworkElement cell) return;
-            // Apps ask where their icon is right after it is clicked; make sure the answer is current.
-            SetIconBounds(icon, ScreenBoundsOf(cell, VisualTreeHelper.GetDpi(cell)));
-            icon.OnMouseEnter();
-            e.Handled = true;
-        }
-
-        private void Icon_MouseLeave(object sender, MouseEventArgs e)
-        {
-            if (sender is DependencyObject cell) CellState.SetIsPressed(cell, false);
-            IconOf(sender)?.OnMouseLeave();
-            e.Handled = true;
-        }
-
-        private void Icon_MouseMove(object sender, MouseEventArgs e)
-        {
-            IconOf(sender)?.OnMouseMove();
-            e.Handled = true;
-        }
-
-        // Clicks are noted before the app hears of them: the menu or flyout it opens in response
-        // counts as part of the tray for auto-hide.
-        private void Icon_MouseDown(object sender, MouseButtonEventArgs e)
+        void IIconCellHost.NoteIconClick()
         {
             ShowHide?.NoteTrayClick();
-            if (sender is DependencyObject cell) CellState.SetIsPressed(cell, true);
-            IconOf(sender)?.OnMouseDown(e.ChangedButton);
-            e.Handled = true;
+            _overflow.NoteClick();
         }
 
-        private void Icon_MouseUp(object sender, MouseButtonEventArgs e)
+        void IIconCellHost.BeginIconDrag(IconCell cell, IconItem item)
         {
-            ShowHide?.NoteTrayClick();
-            if (sender is DependencyObject cell) CellState.SetIsPressed(cell, false);
-            IconOf(sender)?.OnMouseUp(e.ChangedButton);
-            e.Handled = true;
+            if (_iconDrag != null) return;
+            var drag = new IconDrag(this, _overflow, _model, GetWindow(cell) ?? this, item);
+            drag.Ended += IconDrag_Ended;
+            _iconDrag = drag;
+            UpdateChevron();
+            AppLog.Write($"Dragging icon {item} from the {(item.Placement == IconPlacement.Tray ? "tray" : "hidden icons")}");
+            drag.Start();
         }
+
+        private void IconDrag_Ended(IconDrag drag, IconSettings? changed)
+        {
+            if (_iconDrag != drag) return;
+            _iconDrag = null;
+            if (changed != null)
+            {
+                _settings.Icons = changed;
+                SaveSettings();
+                _model.ApplySettings(changed);
+                IList<IconItem> group = drag.Item.Placement == IconPlacement.Tray ? _model.Tray : _model.Overflow;
+                AppLog.Write($"Icon {drag.Item} dropped: {(drag.Item.Placement == IconPlacement.Tray ? "tray" : "hidden icons")}, place {group.IndexOf(drag.Item) + 1} of {group.Count}");
+            }
+            else
+            {
+                _model.EndPreview();
+                AppLog.Write($"Icon {drag.Item} not moved");
+            }
+            OnArranged();
+        }
+
+        private void OnArranged()
+        {
+            UpdateChevron();
+            if (_iconDrag == null && _overflow.IsOpen && _model.Overflow.Count == 0) _overflow.CloseFlyout("no hidden icons left");
+        }
+
+        /// <summary>The chevron shows while there are hidden icons, and during a drag, to drop icons on.</summary>
+        private void UpdateChevron() => _chevron.IsShown = _model.Overflow.Count > 0 || _iconDrag != null;
+
+        /// <summary>The chevron's screen rectangle in physical pixels, empty while it is not shown.</summary>
+        internal PixelRect ChevronBounds() =>
+            IconList.ItemContainerGenerator.ContainerFromItem(_chevron) is DependencyObject container &&
+            FindDescendant<ChevronCell>(container) is { IsVisible: true, ActualWidth: > 0 } cell
+                ? ScreenBoundsOf(cell) : default;
+
+        private FlyoutAnchor? OverflowAnchor() => _reportedBounds.IsEmpty ? null : new FlyoutAnchor(_reportedBounds, ChevronBounds(), _reportedEdge);
+
+        internal void OpenOverflow(string reason)
+        {
+            if (_model.Overflow.Count > 0 || _iconDrag != null) _overflow.Open(reason);
+        }
+
+        internal void ToggleOverflow(string reason)
+        {
+            if (_overflow.IsOpen) _overflow.CloseFlyout(reason);
+            else OpenOverflow(reason);
+        }
+
+        /// <summary>Shift+right-click on an icon: where it goes, as a rule for it.</summary>
+        void IIconCellHost.ShowIconMenu(IconCell cell, IconItem item)
+        {
+            var menu = new ContextMenu { PlacementTarget = cell, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+            menu.Items.Add(new MenuItem { Header = MenuText(item.Name), IsEnabled = false, FontWeight = FontWeights.SemiBold });
+            menu.Items.Add(new Separator());
+            IconPlacement automatic = IconArrangement.PlacementOf(
+                new IconFacts(item.Identity, item.Icon.IsHidden, item.Icon.ExplorerPlacement), EffectiveRule.None, _model.Settings);
+            IconPlacement? current = item.Rule.Placement;
+            AddPlacementItem(menu, item, null, $"_Automatic ({Describe(automatic)})", current == null);
+            AddPlacementItem(menu, item, IconPlacement.Tray, "Always in the _tray", current == IconPlacement.Tray);
+            AddPlacementItem(menu, item, IconPlacement.Overflow, "In the hidden _icons", current == IconPlacement.Overflow);
+            AddPlacementItem(menu, item, IconPlacement.Hidden, "_Hide", current == IconPlacement.Hidden);
+            menu.Opened += (_, _) =>
+            {
+                _iconMenuOpen = true;
+                NativeMethods.SetForegroundWindow(_hwnd); // keyboard for the menu, as for the grip's
+                menu.Focus();
+            };
+            menu.Closed += (_, _) => _iconMenuOpen = false;
+            menu.IsOpen = true;
+        }
+
+        private void AddPlacementItem(ContextMenu menu, IconItem item, IconPlacement? placement, string header, bool isChecked)
+        {
+            var menuItem = new MenuItem { Header = header, IsCheckable = true, IsChecked = isChecked };
+            menuItem.Click += (_, _) => SetIconPlacement(item, placement);
+            menu.Items.Add(menuItem);
+        }
+
+        private void SetIconPlacement(IconItem item, IconPlacement? placement)
+        {
+            _settings.Icons.EditRule(item.Key, r => r.Placement = placement);
+            SaveSettings();
+            _model.ApplySettings(_settings.Icons);
+            AppLog.Write($"Icon {item}: {(placement == null ? "placed automatically" : Describe(placement.Value))}");
+        }
+
+        private static string Describe(IconPlacement placement) => placement switch
+        {
+            IconPlacement.Tray => "in the tray",
+            IconPlacement.Overflow => "in the hidden icons",
+            _ => "hidden"
+        };
+
+        /// <summary>Menu text shown as it is: an underscore would be an access key.</summary>
+        private static string MenuText(string text) => text.Replace("_", "__");
 
         #endregion
     }

@@ -6,14 +6,15 @@ using System.Text;
 using System.Text.Json;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using FreeSystemTray.Icons;
 using FreeSystemTray.TrayHost;
 
 namespace FreeSystemTray.Diagnostics
 {
     /// <summary>
     /// With --diag DIR: writes DIR\state.json every 250 ms when it changes. It lists the host status,
-    /// Explorer's taskbar flags, the window's bounds and visibility, and every icon with its screen
-    /// rectangle. The smoke test reads it to find icons to click.
+    /// Explorer's taskbar flags, the window's bounds and visibility, the hidden-icons flyout, and every
+    /// icon with where it is shown and its screen rectangle. The smoke test reads it to find icons to click.
     /// </summary>
     internal sealed class StateWriter : IDisposable
     {
@@ -45,6 +46,8 @@ namespace FreeSystemTray.Diagnostics
         {
             PixelRect w = _window.ScreenBounds;
             PixelRect hotspot = _window.ShowHide?.HotspotZone ?? default;
+            PixelRect chevron = _window.ChevronBounds();
+            PixelRect overflow = _window.Overflow.ScreenBounds;
             var state = new Dictionary<string, object?>
             {
                 ["pid"] = Environment.ProcessId,
@@ -77,6 +80,13 @@ namespace FreeSystemTray.Diagnostics
                     ["xaml"] = _window.Theme.XamlPath,
                     ["problems"] = _window.ThemeProblems.ToList()
                 },
+                ["chevron"] = chevron.IsEmpty ? null : Rect(chevron),
+                ["overflow"] = new Dictionary<string, object?>
+                {
+                    ["open"] = _window.Overflow.IsOpen,
+                    ["rect"] = overflow.IsEmpty ? null : Rect(overflow),
+                    ["count"] = _window.Icons.Overflow.Count
+                },
                 ["shell"] = Shell(),
                 ["iconCount"] = _host.Icons.Count,
                 ["icons"] = _host.Icons.Select(Describe).ToList(),
@@ -84,16 +94,16 @@ namespace FreeSystemTray.Diagnostics
             };
             string json = JsonSerializer.Serialize(state, JsonOptions);
             if (json == _last) return;
-            _last = json;
             try
             {
                 string temp = _path + ".tmp";
                 File.WriteAllText(temp, json, Encoding.UTF8);
                 File.Move(temp, _path, true);
+                _last = json;
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Diagnostics only; the next tick tries again.
+                // Diagnostics only (the smoke test may be reading the file); the next tick tries again.
             }
         }
 
@@ -132,8 +142,19 @@ namespace FreeSystemTray.Diagnostics
                 ["id"] = icon.Id,
                 ["tip"] = icon.ToolTip,
                 ["hidden"] = icon.IsHidden,
-                ["path"] = icon.OwnerPath
+                ["path"] = icon.OwnerPath,
+                ["explorer"] = icon.ExplorerPlacement.ToString()
             };
+            // Where the tray shows it: "Tray" or "Overflow" with its place there (from 0), or "Hidden".
+            if (_window.Icons.ItemFor(icon) is IconItem item)
+            {
+                d["key"] = item.Key;
+                d["placement"] = item.Placement.ToString();
+                IList<IconItem> group = item.Placement == IconPlacement.Tray ? _window.Icons.Tray : _window.Icons.Overflow;
+                d["index"] = item.Placement == IconPlacement.Hidden ? null : group.IndexOf(item);
+                d["shownTip"] = item.ToolTip;
+                d["name"] = item.Name;
+            }
             if (icon is ManagedShellTrayIcon ms)
             {
                 var ni = ms.Source;
@@ -159,6 +180,8 @@ namespace FreeSystemTray.Diagnostics
         }
 
         private static string Hex(IntPtr h) => $"0x{h.ToInt64():X}";
+
+        private static int[] Rect(PixelRect r) => new[] { r.Left, r.Top, r.Width, r.Height };
 
         public void Dispose()
         {

@@ -14,7 +14,7 @@ namespace SpikeTool
     ///   traywnds                  list Shell_TrayWnd windows in Z-order (the first one receives Shell_NotifyIcon)
     ///   windows [filter]          list visible top-level windows (menus, flyouts, ...)
     ///   fg                        show the foreground window
-    ///   click X Y [left|right|middle|double]
+    ///   click X Y [left|right|middle|double] [shift]   with shift, Shift is held during the click
     ///   move X Y                  move the cursor (hover)
     ///   drag X1 Y1 X2 Y2          left-button drag
     ///   key KEYS                  press a key or chord: esc, enter, or modifiers (ctrl, alt, shift, win)
@@ -41,6 +41,8 @@ namespace SpikeTool
     ///   explorer-delete HWND UID [GUID]  NIM_DELETE sent to Explorer's tray only (it forgets the icon)
     ///   explorer-add HWND UID GUID|- CALLBACK "EXE PATH" "TIP"  NIM_ADD sent to Explorer's tray only,
     ///                             with a placeholder icon and the given exe path in shell32's field
+    ///   explorer-hide HWND UID on|off  NIM_MODIFY with NIS_HIDDEN set or cleared, sent to Explorer's tray
+    ///                             only: Explorer hides the icon, the tray host's copy stays visible
     ///   explorer-tray             Explorer's taskbar child windows (tray area, chevron, clock) with rects
     /// </summary>
     internal static class Program
@@ -58,7 +60,11 @@ namespace SpikeTool
                     case "traywnds": TrayWnds(); break;
                     case "windows": Windows(args.Length > 1 ? args[1] : null); break;
                     case "fg": Foreground(); break;
-                    case "click": Click(I(args[1]), I(args[2]), args.Length > 3 ? args[3] : "left"); break;
+                    case "click":
+                        // "shift" after the kind holds Shift down during the click.
+                        if (args.Length > 4 && args[4] == "shift") ShiftClick(I(args[1]), I(args[2]), args[3]);
+                        else Click(I(args[1]), I(args[2]), args.Length > 3 ? args[3] : "left");
+                        break;
                     case "move": W.SetCursorPos(I(args[1]), I(args[2])); break;
                     case "drag": Drag(I(args[1]), I(args[2]), I(args[3]), I(args[4])); break;
                     case "key": Key(args[1]); break;
@@ -95,6 +101,7 @@ namespace SpikeTool
                     case "iconrect": IconRect(args); break;
                     case "explorer-delete": ExplorerDelete(args); break;
                     case "explorer-add": ExplorerAdd(args); break;
+                    case "explorer-hide": ExplorerHide(args); break;
                     case "explorer-tray": ExplorerTray(); break;
                     default: Console.WriteLine("unknown command"); return 1;
                 }
@@ -301,6 +308,20 @@ namespace SpikeTool
                 case "middle": Button(0x0020, 0x0040); break;
                 case "double": Button(0x0002, 0x0004); Thread.Sleep(80); Button(0x0002, 0x0004); break;
                 default: throw new ArgumentException(kind);
+            }
+        }
+
+        private static void ShiftClick(int x, int y, string kind)
+        {
+            W.SendInput(1, new[] { new W.INPUT { type = 1, ki = new W.KEYBDINPUT { wVk = 0x10 } } }, Marshal.SizeOf<W.INPUT>());
+            try
+            {
+                Click(x, y, kind);
+            }
+            finally
+            {
+                Thread.Sleep(40);
+                W.SendInput(1, new[] { new W.INPUT { type = 1, ki = new W.KEYBDINPUT { wVk = 0x10, dwFlags = 0x0002 } } }, Marshal.SizeOf<W.INPUT>());
             }
         }
 
@@ -746,6 +767,29 @@ namespace SpikeTool
                 Guid.Parse(a[3]).ToByteArray().CopyTo(payload, 8 + 936);
             }
             Console.WriteLine($"NIM_DELETE to Explorer's taskbar {Describe(explorer)} -> {SendCopyData(explorer, 1, payload, new IntPtr(hwnd))}");
+        }
+
+        /// <summary>
+        /// NIM_MODIFY with NIS_HIDDEN set or cleared, sent only to Explorer's taskbar: Explorer hides
+        /// (or shows) the icon while the tray host's copy stays as the app registered it, as Windows
+        /// does with Meet Now while it is turned off.
+        /// </summary>
+        private static void ExplorerHide(string[] a)
+        {
+            IntPtr explorer = ExplorerTrayWnd();
+            if (explorer == IntPtr.Zero) { Console.WriteLine("Explorer's taskbar not found"); return; }
+            var payload = new byte[1484];
+            uint hwnd = (uint)Convert.ToInt64(a[1], 16);
+            bool hide = a[3] == "on";
+            BitConverter.GetBytes(0x34753423u).CopyTo(payload, 0);   // signature
+            BitConverter.GetBytes(1u).CopyTo(payload, 4);            // NIM_MODIFY
+            BitConverter.GetBytes(956).CopyTo(payload, 8);           // cbSize
+            BitConverter.GetBytes(hwnd).CopyTo(payload, 12);
+            BitConverter.GetBytes(uint.Parse(a[2], CultureInfo.InvariantCulture)).CopyTo(payload, 16);
+            BitConverter.GetBytes(0x08u).CopyTo(payload, 20);        // NIF_STATE
+            BitConverter.GetBytes(hide ? 1u : 0u).CopyTo(payload, 8 + 280);   // dwState: NIS_HIDDEN
+            BitConverter.GetBytes(1u).CopyTo(payload, 8 + 284);               // dwStateMask
+            Console.WriteLine($"NIM_MODIFY NIS_HIDDEN={hide} to Explorer's taskbar -> {SendCopyData(explorer, 1, payload, new IntPtr(hwnd))}");
         }
 
         /// <summary>

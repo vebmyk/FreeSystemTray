@@ -33,8 +33,11 @@ namespace FreeSystemTray.Tests
         private static readonly PixelPoint OnTray = new(1600, 1010);
         private static readonly PixelPoint Elsewhere = new(900, 500);
 
-        private static bool Route(bool visible, PixelPoint cursor, bool overExplorer, double? secondsSinceClick) =>
-            PositionQueryRouting.AnswerWithTrayWindow(visible, Tray, cursor, overExplorer,
+        private static readonly PixelRect Overflow = new(1700, 800, 1860, 990);
+        private static readonly PixelPoint OnOverflow = new(1750, 900);
+
+        private static bool Route(bool visible, PixelPoint cursor, bool overExplorer, double? secondsSinceClick, PixelRect overflow = default) =>
+            PositionQueryRouting.AnswerWithTrayWindow(visible, Tray, overflow, cursor, overExplorer,
                 secondsSinceClick is double s ? TimeSpan.FromSeconds(s) : null);
 
         [Fact]
@@ -54,7 +57,15 @@ namespace FreeSystemTray.Tests
 
         [Fact]
         public void Without_bounds_the_tray_window_never_answers() =>
-            Assert.False(PositionQueryRouting.AnswerWithTrayWindow(true, default, OnTray, false, TimeSpan.Zero));
+            Assert.False(PositionQueryRouting.AnswerWithTrayWindow(true, default, default, OnTray, false, TimeSpan.Zero));
+
+        [Fact]
+        public void The_cursor_on_the_open_hidden_icons_flyout_means_the_tray_window()
+        {
+            Assert.True(Route(true, OnOverflow, false, null, Overflow));
+            Assert.False(Route(true, OnOverflow, false, null)); // closed: nothing of ours is there
+            Assert.False(Route(false, OnOverflow, false, null, Overflow));
+        }
     }
 
     public class ShellPathsTests

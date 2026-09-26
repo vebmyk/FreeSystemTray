@@ -46,13 +46,15 @@ namespace FreeSystemTray.TrayHost.Protocol
         /// Whether an icon-position (Shell_NotifyIconGetRect) or taskbar-position (ABM_GETTASKBARPOS)
         /// query should be answered with the tray window instead of Explorer's taskbar. Apps ask the
         /// tray host both when an icon in our window is clicked and when the same icon is clicked in
-        /// Explorer's own tray, so the answer depends on where the user is interacting.
+        /// Explorer's own tray, so the answer depends on where the user is interacting. The tray's
+        /// hidden-icons flyout (<paramref name="overflowBounds"/>, empty while closed) counts as part
+        /// of the tray window.
         /// </summary>
         public static bool AnswerWithTrayWindow(
-            bool trayVisible, PixelRect trayBounds, PixelPoint cursor, bool cursorOverExplorerTray, TimeSpan? sinceLastInteraction)
+            bool trayVisible, PixelRect trayBounds, PixelRect overflowBounds, PixelPoint cursor, bool cursorOverExplorerTray, TimeSpan? sinceLastInteraction)
         {
             if (!trayVisible || trayBounds.IsEmpty) return false;
-            if (trayBounds.Contains(cursor)) return true;
+            if (trayBounds.Contains(cursor) || (!overflowBounds.IsEmpty && overflowBounds.Contains(cursor))) return true;
             if (cursorOverExplorerTray) return false;
             return sinceLastInteraction is TimeSpan t && t <= InteractionGrace;
         }

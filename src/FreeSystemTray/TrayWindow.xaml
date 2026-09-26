@@ -2,7 +2,6 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:FreeSystemTray"
-        xmlns:scaling="clr-namespace:FreeSystemTray.Scaling"
         Title="FreeSystemTray"
         WindowStyle="None"
         ResizeMode="NoResize"
@@ -20,7 +19,10 @@
          let a window without AllowsTransparency become layered, so it could not fade otherwise.
          Sizes come from TrayLayout (the scaling settings and the theme), colours from the theme,
          through resources set in code. The styles come first among the merged dictionaries, then the
-         theme's values, then the theme's own XAML, which can override both. -->
+         theme's values, then the theme's own XAML, which can override both. The hidden-icons flyout
+         (OverflowWindow) shares these resources.
+         The icon list shows the tray's icons (IconModel.Tray) and then the chevron that opens the
+         flyout; their templates are in TrayStyles.xaml. -->
     <Window.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -66,39 +68,6 @@
                                              Spacing="{DynamicResource Icons.Spacing}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border x:Name="Cell"
-                                    Width="{DynamicResource CellSize}"
-                                    Height="{DynamicResource CellSize}"
-                                    Background="Transparent"
-                                    CornerRadius="{DynamicResource Icon.HighlightCornerRadius}"
-                                    ToolTip="{Binding ToolTip}"
-                                    MouseEnter="Icon_MouseEnter"
-                                    MouseLeave="Icon_MouseLeave"
-                                    MouseMove="Icon_MouseMove"
-                                    MouseDown="Icon_MouseDown"
-                                    MouseUp="Icon_MouseUp">
-                                <scaling:ScaledIcon Source="{Binding Image}"
-                                                    IconId="{Binding Id}"
-                                                    OwnerPath="{Binding OwnerPath}"
-                                                    Width="{DynamicResource IconSize}"
-                                                    Height="{DynamicResource IconSize}" />
-                            </Border>
-                            <DataTemplate.Triggers>
-                                <DataTrigger Binding="{Binding IsHidden}" Value="True">
-                                    <Setter TargetName="Cell" Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                                <Trigger SourceName="Cell" Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.HoverBrush}" />
-                                </Trigger>
-                                <!-- After the hover trigger, so it wins while both apply. -->
-                                <Trigger SourceName="Cell" Property="local:CellState.IsPressed" Value="True">
-                                    <Setter TargetName="Cell" Property="Background" Value="{DynamicResource Icon.PressedBrush}" />
-                                </Trigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </DockPanel>
         </Border>
