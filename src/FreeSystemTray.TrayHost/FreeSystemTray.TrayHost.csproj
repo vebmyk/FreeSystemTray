@@ -3,6 +3,10 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- ManagedShell uses WinForms (MouseHelper, NativeWindowEx, ...) but its NuGet package only
+         declares the WPF framework. The installed .NET Desktop Runtime has WinForms anyway; a
+         self-contained publish (tools/Publish.ps1) does not, and crashed on the first hover. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <RootNamespace>FreeSystemTray.TrayHost</RootNamespace>
