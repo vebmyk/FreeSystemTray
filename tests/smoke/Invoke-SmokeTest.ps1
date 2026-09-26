@@ -249,8 +249,9 @@ try {
     $e = Our-Icon $run "SmokeE"
     Start-Sleep -Milliseconds 3500   # a read of Explorer's tray from before the next gap
     Tool explorer-tip $e.hwnd 105 "SmokeE tip, changed in Explorer only" raise | Out-Null
+    # SmokeE has two icons (uIDs 105 and 106), whose tooltips both start with "SmokeE tip".
     Check "a tooltip change that reached only Explorer while it held the role is caught up on" (Wait-Until {
-        (Our-Icon $run "SmokeE").tip -eq "SmokeE tip, changed in Explorer only" } 3000)
+        ((Read-State $run).icons | Where-Object { $_.tip -like "SmokeE*" -and $_.uid -eq 105 }).tip -eq "SmokeE tip, changed in Explorer only" } 3000)
     Start-Sleep -Milliseconds 3500
     Tool explorer-add $e.hwnd 107 - 0x8064 "C:\SmokeE.exe" "SmokeE extra, in Explorer only" raise | Out-Null
     function Extra { (Read-State $run).icons | Where-Object { $_.tip -like "SmokeE extra*" } }

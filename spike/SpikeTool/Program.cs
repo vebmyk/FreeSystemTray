@@ -52,6 +52,8 @@ namespace SpikeTool
     ///   explorer-hide HWND UID on|off  NIM_MODIFY with NIS_HIDDEN set or cleared, sent to Explorer's tray
     ///                             only: Explorer hides the icon, the tray host's copy stays visible
     ///   explorer-tip HWND UID "TIP"   NIM_MODIFY of the tooltip, sent to Explorer's tray only
+    ///   notify HWND MSG WPARAM LPARAM  SendNotifyMessage, printing whether Windows let it through
+    ///                             (UIPI refuses messages to a higher-integrity window it has not allowed)
     ///   explorer-... raise        any of the explorer-add/delete/hide/tip commands followed by "raise":
     ///                             then put Explorer's taskbar above the tray host's for a moment, as if
     ///                             the message had arrived while Explorer held the tray host role
@@ -124,6 +126,14 @@ namespace SpikeTool
                     case "explorer-add": ExplorerAdd(args); break;
                     case "explorer-hide": ExplorerHide(args); break;
                     case "explorer-tip": ExplorerTip(args); break;
+                    case "notify":
+                    {
+                        IntPtr target = new IntPtr(Convert.ToInt64(args[1], 16));
+                        bool ok = W.SendNotifyMessage(target, (uint)Convert.ToInt64(args[2], 16), new IntPtr(Convert.ToInt64(args[3], 16)), new IntPtr(Convert.ToInt64(args[4], 16)));
+                        int error = Marshal.GetLastWin32Error();
+                        Console.WriteLine($"SendNotifyMessage(0x{target.ToInt64():X} {Describe(target)}, 0x{args[2]}) -> {ok}{(ok ? "" : $" (error {error})")}");
+                        break;
+                    }
                     case "explorer-tray": ExplorerTray(); break;
                     default: Console.WriteLine("unknown command"); return 1;
                 }
@@ -1092,7 +1102,7 @@ namespace SpikeTool
         [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr h, int msg, IntPtr w, StringBuilder l, uint flags, uint timeout, out IntPtr result);
         [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
-        [DllImport("user32.dll")] public static extern bool SendNotifyMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool SendNotifyMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int RegisterWindowMessage(string s);
         [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
