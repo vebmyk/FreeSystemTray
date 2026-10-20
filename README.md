@@ -30,7 +30,8 @@ the SDK, see [Portable build](#portable-build).
 - **Settings:** the menu's **Settings…**, a left-click on FreeSystemTray's own icon, or starting
   the exe again. Every change applies and is saved at once.
 - **Drag an icon** to move it, onto the chevron (**^**) to hide it in the hidden-icons flyout, or out
-  of the flyout back into the tray. **Shift+right-click** an icon to choose where it goes.
+  of the flyout back into the tray. In a grid of a fixed size the chevron expands the tray instead
+  (see [Layout](#layout-of-the-icons)). **Shift+right-click** an icon to choose where it goes.
 - **Ctrl+Alt+Shift+T** hides and shows the tray (configurable, see below).
 - Only one instance runs at a time. `FreeSystemTray.exe --exit` closes the running one.
 
@@ -94,7 +95,7 @@ same settings. They are in `settings.json` too:
 |---|---|
 | `default` | Where icons without a rule go: `Tray`, `Overflow` (the hidden-icons flyout), or `Windows`: where Explorer shows them (its taskbar icons in the tray, its hidden icons in the flyout). |
 | `hideWindowsHidden` | Hide icons that Explorer registers but does not show, such as Meet Now while it is turned off in "Turn system icons on or off". A rule that places the icon wins. |
-| `maxTrayIcons` | At most this many icons in the tray; the others go to the flyout, those a rule puts in the tray last. `0`: no limit. |
+| `maxTrayIcons` | At most this many icons in the tray; the others go to the flyout, those a rule puts in the tray last. `0`: no limit. A grid of a fixed size (below) limits it too. |
 | `rules[].match` | Which icons: a GUID, an exe file name (`Discord.exe`, all its icons), a full path, or either with `:uID` for one of the exe's icons (`PowerToys.exe:1`). The settings window and dragging write the icon's own name: its GUID, or `exe:uID`. For each value, the rule that names the icon most exactly wins. |
 | `rules[].placement` | `Tray`, `Overflow` or `Hidden`. Left out: the default decides. |
 | `rules[].label` | The icon's name in the settings window and menus. |
@@ -149,6 +150,30 @@ The show/hide part of `settings.json`, with its defaults:
 | `hideOnClickAway` | Auto-hide: hide on a click outside the tray or a switch to another window. |
 | `animation` | `None`, `Fade`, or `Slide` (out through the tray's edge that faces the nearest screen edge). |
 
+### Layout of the icons
+
+A row, a column or a grid, set apart from the theme: `columns` × `rows` in the settings window
+(Appearance) or in `settings.json`. `0` means as many as needed.
+
+```json
+"layout": { "columns": 4, "rows": 2 }
+```
+
+| `columns` × `rows` | Layout |
+|---|---|
+| `0` × `1` | A row (the default). |
+| `1` × `0` | A column; the grip goes on top. |
+| `4` × `0` | Rows of four, as many rows as needed. |
+| `0` × `2` | Two rows, filled top to bottom, growing to the right. |
+| `4` × `2` | A fixed grid of 8 cells. |
+
+A fixed grid never grows past its size. When more icons are to be shown than fit, or some are in
+the hidden icons, its last cell is the chevron, and a click on it expands the tray in place: the
+icons that did not fit and the hidden icons follow in more rows of the same width, away from the
+tray's anchor corner (upwards for a tray at the bottom), so the grid and the chevron stay where
+they are. Another click, or the tray hiding, collapses it. The hidden-icons flyout is not used.
+Dragging an icon onto the chevron expands the tray too.
+
 ### Size
 
 Two independent sizes: the icons, and everything around them (the padding in each icon's cell, the
@@ -180,8 +205,10 @@ so large sizes are upscaled from it.
 ### Themes
 
 Choose a theme from the menu's **Theme** submenu, the settings window (Appearance), or with
-`"theme": "Glass"` in `settings.json`. Built in: Dark (the default), Light, Glass, Acrylic, Minimal,
-Dark column, Glass grid and Gradient (XAML). Your own themes go in a `themes` folder next to
+`"theme": "Glass"` in `settings.json`. Built in: Dark (the default), Light, Glass, Acrylic, Minimal
+and Gradient (XAML). A theme is only the look: the layout is [its own setting](#layout-of-the-icons)
+(the former Dark column and Glass grid themes are now Dark and Glass in a column and in rows of four,
+and settings that named them are changed to that). Your own themes go in a `themes` folder next to
 `settings.json` (`%LOCALAPPDATA%\FreeSystemTray\themes`); a theme's id is its file name without
 `.json`, and one with the name of a built-in theme replaces it. Edits to a theme file apply while
 the app runs.
@@ -197,7 +224,7 @@ and in the end from Dark. Sizes are pixels at a tray size of 100% and grow with 
   "background": { "color": "#1C1C1C", "opacity": 0.55, "blur": "Blur" },
   "border": { "color": "#40FFFFFF", "thickness": 1, "cornerRadius": 8 },
   "grip": { "color": "#28FFFFFF", "size": 10, "position": "Auto" },
-  "icons": { "layout": "Row", "gridColumns": 4, "spacing": 0, "hover": "#33FFFFFF", "pressed": "#55FFFFFF", "highlightCornerRadius": 4 },
+  "icons": { "spacing": 0, "hover": "#33FFFFFF", "pressed": "#55FFFFFF", "highlightCornerRadius": 4 },
   "tooltip": { "background": "#202020", "foreground": "White", "border": "#50FFFFFF", "borderThickness": 1,
                "cornerRadius": 4, "fontFamily": "Segoe UI", "fontSize": 12, "padding": 6 },
   "xaml": "MyTheme.xaml"
@@ -209,8 +236,8 @@ and in the end from Dark. Sizes are pixels at a tray size of 100% and grow with 
 | colours | `#RRGGBB`, `#AARRGGBB`, `#RGB`, or a name such as `White`. |
 | `foreground` | What the tray draws itself: the hidden-icons chevron. |
 | `background.blur` | `None`, `Blur` (what is behind the tray, blurred, seen through the background colour) or `Acrylic` (Windows 10's acrylic, tinted with the background colour). While Windows' "Transparency effects" is off, Windows cannot blur, and the tray uses its background colour, opaque. |
-| `icons.layout` | `Row`, `Column`, or `Grid` (rows of `gridColumns` icons). |
 | `grip.position` | `Auto` (left of a row or grid, above a column), `Left`, `Top`, `Right` or `Bottom`. |
+| `icons.layout`, `icons.gridColumns` | No longer read: the layout is a setting. A theme that has them gets a note in the log. |
 | `xaml` | A XAML resource dictionary, relative to the theme file, for what theme files cannot say, such as gradients. It can replace these resources: the brushes `Tray.Background`, `Tray.Foreground`, `Tray.BorderBrush`, `Tray.GripBrush`, `Icon.HoverBrush`, `Icon.PressedBrush`, `ToolTip.Background`, `ToolTip.Foreground`, `ToolTip.BorderBrush`; `ToolTip.BorderThickness` and `ToolTip.Padding` (Thickness), `ToolTip.CornerRadius` (CornerRadius), `ToolTip.FontFamily` and `ToolTip.FontSize`; and the tooltip style (an implicit `Style` for `ToolTip`). See `Themes/Gradient.xaml`. **XAML can run code: only use XAML files you trust.** |
 
 A background is never fully transparent: Windows lets clicks through fully transparent pixels. Some
@@ -305,7 +332,7 @@ powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-ExplorerRestartTest.
 |---|---|
 | `src/FreeSystemTray.TrayHost` | `ITrayHost` and its ManagedShell implementation: the only code that talks to the shell. |
 | `src/FreeSystemTray` | The WPF app: tray window, placement, show/hide (`ShowHide/`), scaling (`Scaling/`), themes (`Theming/`, and the built-in ones in `Themes/`), icon rules and arrangement (`Icons/`), the hidden-icons flyout, dragging icons, the settings window, the app's own icon, autostart, settings, logging, watchdog. |
-| `tests/FreeSystemTray.Tests` | Unit tests: placement, message formats, routing and fix-up rules, settings, hotkeys, hotspots, auto-hide rules, full-screen tracking, sizes and icon resampling, themes, the icon panel, icon rules, arrangement and order, where Explorer shows an icon, flyout placement, autostart, catching up with Explorer's tray after a gap, building tray messages, the crash policy. |
+| `tests/FreeSystemTray.Tests` | Unit tests: placement, message formats, routing and fix-up rules, settings, hotkeys, hotspots, auto-hide rules, full-screen tracking, sizes and icon resampling, themes, the icon grid, icon rules, arrangement and order, where Explorer shows an icon, flyout placement, autostart, catching up with Explorer's tray after a gap, building tray messages, the crash policy. |
 | `tests/smoke` | The end-to-end smoke test and the Explorer restart test. |
 | `tools/Make-AppIcon.ps1` | Draws `src/FreeSystemTray/FreeSystemTray.ico`. |
 | `tools/Publish.ps1` | The portable build. |

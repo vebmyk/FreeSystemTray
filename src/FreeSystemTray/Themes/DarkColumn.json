@@ -1,5 +1,0 @@
-{
-  "name": "Dark column",
-  "basedOn": "Dark",
-  "icons": { "layout": "Column" }
-}

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows.Media;
 
@@ -18,18 +19,9 @@ namespace FreeSystemTray.Theming
         Acrylic
     }
 
-    public enum IconLayout
-    {
-        Row,
-        Column,
-
-        /// <summary>Rows of <see cref="Theme.GridColumns"/> icons.</summary>
-        Grid
-    }
-
     public enum GripPosition
     {
-        /// <summary>Left for a row or grid, top for a column.</summary>
+        /// <summary>Left for a row or grid, top for a column (the layout setting).</summary>
         Auto,
         Left,
         Top,
@@ -84,8 +76,12 @@ namespace FreeSystemTray.Theming
 
         public sealed class IconsPart
         {
-            public IconLayout? Layout { get; set; }
-            public int? GridColumns { get; set; }
+            /// <summary>No longer part of a theme (now the layout setting); read only to say so.</summary>
+            public JsonElement? Layout { get; set; }
+
+            /// <summary>No longer part of a theme (now the layout setting); read only to say so.</summary>
+            public JsonElement? GridColumns { get; set; }
+
             public double? Spacing { get; set; }
             public string? Hover { get; set; }
             public string? Pressed { get; set; }
@@ -125,8 +121,6 @@ namespace FreeSystemTray.Theming
         public double GripSize { get; init; } = 10;
         public GripPosition GripPosition { get; init; } = GripPosition.Auto;
 
-        public IconLayout Layout { get; init; } = IconLayout.Row;
-        public int GridColumns { get; init; } = 4;
         public double IconSpacing { get; init; }
         public Color HoverColor { get; init; } = Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
         public Color PressedColor { get; init; } = Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF);
@@ -147,10 +141,11 @@ namespace FreeSystemTray.Theming
         public static readonly Theme Default = new();
 
         /// <summary>
-        /// The grip's actual side: <see cref="GripPosition.Auto"/> puts it at the start of the icons.
+        /// The grip's actual side: <see cref="GripPosition.Auto"/> puts it at the start of the icons,
+        /// on top of a <paramref name="column"/>.
         /// </summary>
-        public GripPosition EffectiveGripPosition =>
-            GripPosition != GripPosition.Auto ? GripPosition : Layout == IconLayout.Column ? GripPosition.Top : GripPosition.Left;
+        public GripPosition GripPositionFor(bool column) =>
+            GripPosition != GripPosition.Auto ? GripPosition : column ? GripPosition.Top : GripPosition.Left;
 
         /// <summary>
         /// This theme with <paramref name="file"/>'s values on top. Invalid values are left out (they
@@ -190,10 +185,10 @@ namespace FreeSystemTray.Theming
             }
             if (file.Icons is { } icons)
             {
+                if (icons.Layout != null || icons.GridColumns != null)
+                    problems.Add("icons.layout and icons.gridColumns are no longer part of a theme: set the layout in the settings instead (columns and rows); ignored");
                 t = t with
                 {
-                    Layout = icons.Layout ?? t.Layout,
-                    GridColumns = Math.Clamp(icons.GridColumns ?? t.GridColumns, 1, 64),
                     IconSpacing = Clamp(icons.Spacing, t.IconSpacing, 0, 200),
                     HoverColor = ParseColor(icons.Hover, t.HoverColor, "icons.hover", problems),
                     PressedColor = ParseColor(icons.Pressed, t.PressedColor, "icons.pressed", problems),
@@ -229,7 +224,7 @@ namespace FreeSystemTray.Theming
             Grip = new() { Color = Format(GripColor), Size = GripSize, Position = GripPosition },
             Icons = new()
             {
-                Layout = Layout, GridColumns = GridColumns, Spacing = IconSpacing,
+                Spacing = IconSpacing,
                 Hover = Format(HoverColor), Pressed = Format(PressedColor), HighlightCornerRadius = HighlightCornerRadius
             },
             ToolTip = new()

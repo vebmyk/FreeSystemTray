@@ -29,8 +29,9 @@ namespace FreeSystemTray
     /// menus. It sizes itself around the icons with its anchor corner fixed, and can be dragged by the
     /// grip on its left edge unless the position is locked. <see cref="ShowHide"/> shows and hides it.
     /// It shows the icons the icon settings put in the tray (<see cref="IconModel"/>), then a chevron
-    /// that opens the others in the hidden-icons flyout (<see cref="OverflowWindow"/>). Icons can be
-    /// dragged to a new place, between the two as well.
+    /// that opens the others in the hidden-icons flyout (<see cref="OverflowWindow"/>). In a grid of a
+    /// fixed size (<see cref="IconGrid.IsFixed"/>) the chevron instead expands the tray in place to
+    /// show them. Icons can be dragged to a new place, between the two as well.
     /// </summary>
     public partial class TrayWindow : Window, IIconCellHost
     {
@@ -61,7 +62,11 @@ namespace FreeSystemTray
         private bool _transparency = WindowEffects.TransparencyEnabled();
         private readonly IconModel _model;
         private readonly ChevronItem _chevron = new();
+        private readonly CollectionContainer _expandedIcons = new();
         private readonly OverflowWindow _overflow;
+        private IconGrid _grid;
+        private bool _expanded;
+        private bool _expandUp;
         private IconDrag? _iconDrag;
         private bool _iconMenuOpen;
 
@@ -71,13 +76,16 @@ namespace FreeSystemTray
             _settings = settings;
             _store = store;
             _themes = themes;
+            _grid = settings.Layout.Grid;
+            _expandUp = ExpandsUp(settings);
             InitializeComponent();
             Title = WindowTitle;
 
-            _model = new IconModel(host, settings.Icons, Dispatcher);
+            _model = new IconModel(host, settings.Icons, Dispatcher, _grid.Capacity);
             IconCell.SetHost(this, this);
             ChevronCell.SetToggle(this, () => ToggleOverflow("chevron"));
-            IconList.ItemsSource = new CompositeCollection { new CollectionContainer { Collection = _model.Tray }, _chevron };
+            // While the tray is expanded the hidden icons follow the chevron, so the chevron stays where it is.
+            IconList.ItemsSource = new CompositeCollection { new CollectionContainer { Collection = _model.Tray }, _chevron, _expandedIcons };
             _model.Tray.CollectionChanged += TrayIcons_CollectionChanged;
             _model.Arranged += (_, _) => OnArranged();
             _overflow = new OverflowWindow(this, host, _model, OverflowAnchor, AppLog.Write);
@@ -85,7 +93,9 @@ namespace FreeSystemTray
             OnArranged();
             IsVisibleChanged += (_, _) =>
             {
-                if (!IsVisible) _overflow.CloseFlyout("the tray hid");
+                if (IsVisible) return;
+                _overflow.CloseFlyout("the tray hid");
+                SetExpanded(false, "the tray hid");
             };
 
             ContentHost.ContentSizeChanged += (_, _) => QueuePlacement();
@@ -178,10 +188,12 @@ namespace FreeSystemTray
         internal void ApplySettings(AppSettings settings)
         {
             _settings = settings;
+            _grid = settings.Layout.Grid;
+            if (!_grid.IsFixed) SetExpanded(false, "the grid has no fixed size");
             UpdateGrip();
             QueuePlacement();
             ShowHide?.ApplySettings(settings.ShowHide);
-            _model.ApplySettings(settings.Icons);
+            _model.ApplySettings(settings.Icons, _grid.Capacity);
             LoadTheme();
             SettingsApplied?.Invoke(this, EventArgs.Empty);
         }
@@ -191,6 +203,12 @@ namespace FreeSystemTray
 
         /// <summary>The theme in use.</summary>
         internal Theme Theme => _theme;
+
+        /// <summary>The icons' arrangement, from the layout settings.</summary>
+        internal IconGrid Grid => _grid;
+
+        /// <summary>A fixed-size grid shows its hidden icons in place (its chevron expanded it).</summary>
+        internal bool IsExpanded => _expanded;
 
         /// <summary>What was wrong with the theme's files when it was last loaded (diagnostics).</summary>
         internal IReadOnlyList<string> ThemeProblems { get; private set; } = Array.Empty<string>();
@@ -232,7 +250,7 @@ namespace FreeSystemTray
                     ThemeProblems = problems.Append($"{theme.XamlPath}: {ex.Message}").ToList();
                 }
             }
-            AppLog.Write($"Theme {theme.Id} ('{theme.Name}'): {theme.Layout}{(theme.Layout == IconLayout.Grid ? $" of {theme.GridColumns}" : "")}, " +
+            AppLog.Write($"Theme {theme.Id} ('{theme.Name}'): " +
                          $"background {Theme.Format(theme.Background)} at {theme.BackgroundOpacity:0.##}, blur {theme.Blur}" +
                          (theme.Blur != TrayBlur.None && !_transparency ? " (Windows' transparency effects are off: solid background instead)" : "") +
                          $", corner radius {theme.CornerRadius:0.##}" +
@@ -241,8 +259,8 @@ namespace FreeSystemTray
         }
 
         /// <summary>
-        /// Applies the scaling settings and the theme: sizes, colours, the icons' arrangement, the grip's
-        /// side, and the blur. The window then resizes itself around its anchor corner.
+        /// Applies the scaling and layout settings and the theme: sizes, colours, the icons' arrangement,
+        /// the grip's side, and the blur. The window then resizes itself around its anchor corner.
         /// </summary>
         private void ApplyAppearance()
         {
@@ -256,10 +274,10 @@ namespace FreeSystemTray
             Resources["TrayBorder"] = new Thickness(layout.BorderThickness);
             Resources["Tray.CornerRadius"] = new CornerRadius(layout.CornerRadius);
             Resources["Icon.HighlightCornerRadius"] = new CornerRadius(layout.HighlightCornerRadius);
-            Resources["Icons.Layout"] = t.Layout;
-            Resources["Icons.Columns"] = t.GridColumns;
+            Resources["Icons.Grid"] = _grid;
+            Resources["Icons.ExpandUp"] = _expandUp;
             Resources["Icons.Spacing"] = layout.Spacing;
-            Resources["IconListMargin"] = t.Layout == IconLayout.Column
+            Resources["IconListMargin"] = _grid.IsColumn
                 ? new Thickness(layout.MarginAcross, layout.MarginAlong, layout.MarginAcross, layout.MarginAlong)
                 : new Thickness(layout.MarginAlong, layout.MarginAcross, layout.MarginAlong, layout.MarginAcross);
             Resources["OverflowPadding"] = new Thickness(Math.Max(layout.MarginAlong, layout.MarginAcross));
@@ -267,11 +285,13 @@ namespace FreeSystemTray
             Resources["Chevron.Width"] = layout.IconSize * 0.625;
             Resources["Chevron.Height"] = layout.IconSize * 0.3125;
             Resources["Chevron.Stroke"] = Math.Max(1, layout.IconSize / 12);
-            PlaceGrip(t.EffectiveGripPosition, layout);
+            PlaceGrip(t.GripPositionFor(_grid.IsColumn), layout);
+            UpdateChevronAngle();
             UpdateThemeDictionaries();
             UseLayoutRounding = s.SnapToPixels;
             SnapsToDevicePixels = s.SnapToPixels;
             ScaledIcon.SetOptions(IconList, new IconRenderOptions(s.IconScaling, s.SnapToPixels, s.ExeIcons.ToArray()));
+            AppLog.Write($"Layout: {_grid}" + (_grid.IsFixed ? $", {_grid.Capacity} cells" : ""));
             AppLog.Write($"Scaling: icons {layout.IconSize:0.##} px ({s.IconSize}) in {layout.CellSize:0.##} px cells (tray size {s.TraySize}), " +
                          $"{s.IconScaling}, {(s.SnapToPixels ? "snapped to whole pixels" : "exact sizes")}" +
                          (s.ExeIcons.Count > 0 ? $", exe icons for {string.Join(", ", s.ExeIcons)}" : ""));
@@ -481,6 +501,7 @@ namespace FreeSystemTray
         {
             _placementQueued = false;
             if (_hwnd == IntPtr.Zero || _dragging) return;
+            UpdateExpandDirection();
             DpiScale dpi = VisualTreeHelper.GetDpi(this);
             Size content = ContentHost.ContentSize;
             var size = new PixelSize((int)Math.Ceiling(content.Width * dpi.DpiScaleX), (int)Math.Ceiling(content.Height * dpi.DpiScaleY));
@@ -515,7 +536,7 @@ namespace FreeSystemTray
                 _reportedBounds = bounds;
                 _reportedEdge = edge;
                 _host.SetTrayWindowBounds(bounds, edge);
-                _chevron.Angle = ChevronItem.AngleFor(edge);
+                UpdateChevronAngle();
                 if (_overflow.IsOpen) _overflow.Place();
             }
             UpdateIconBounds();
@@ -523,13 +544,17 @@ namespace FreeSystemTray
 
         private void UpdateIconBounds()
         {
-            foreach (IconItem item in _model.Tray)
+            var shown = new HashSet<ITrayIcon>(ReferenceEqualityComparer.Instance);
+            foreach (IconItem item in _expanded ? _model.Tray.Concat(_model.Overflow) : _model.Tray)
             {
+                shown.Add(item.Icon);
                 if (CellOf(item) is { IsVisible: true, ActualWidth: > 0 } cell)
                     SetIconBounds(item.Icon, cell.ScreenBounds());
                 else
                     _iconBounds.Remove(item.Icon);
             }
+            // The hidden icons of a tray that is no longer expanded.
+            foreach (ITrayIcon gone in _iconBounds.Keys.Where(i => !shown.Contains(i)).ToList()) _iconBounds.Remove(gone);
         }
 
         private void SetIconBounds(ITrayIcon icon, PixelRect bounds)
@@ -809,11 +834,52 @@ namespace FreeSystemTray
         private void OnArranged()
         {
             UpdateChevron();
-            if (_iconDrag == null && _overflow.IsOpen && _model.Overflow.Count == 0) _overflow.CloseFlyout("no hidden icons left");
+            if (_iconDrag == null && _model.Overflow.Count == 0)
+            {
+                if (_overflow.IsOpen) _overflow.CloseFlyout("no hidden icons left");
+                SetExpanded(false, "no hidden icons left");
+            }
         }
 
         /// <summary>The chevron shows while there are hidden icons, and during a drag, to drop icons on.</summary>
         private void UpdateChevron() => _chevron.IsShown = _model.Overflow.Count > 0 || _iconDrag != null;
+
+        /// <summary>
+        /// The chevron points to where the hidden icons appear: the flyout opens away from the nearest
+        /// screen edge; a fixed-size grid expands away from its anchor corner, and points back once expanded.
+        /// </summary>
+        private void UpdateChevronAngle() =>
+            _chevron.Angle = !_grid.IsFixed ? ChevronItem.AngleFor(_reportedEdge) : (_expandUp ? 0 : 180) + (_expanded ? 180 : 0);
+
+        /// <summary>
+        /// An expanded grid grows away from the window's anchor corner, as the window does: upwards
+        /// from a bottom corner, so the grid's own icons and the chevron stay where they are.
+        /// </summary>
+        private void UpdateExpandDirection()
+        {
+            bool up = ExpandsUp(_settings);
+            if (up == _expandUp) return;
+            _expandUp = up;
+            Resources["Icons.ExpandUp"] = up;
+            UpdateChevronAngle();
+        }
+
+        private static bool ExpandsUp(AppSettings settings) =>
+            (settings.Position?.Anchor ?? Corner.BottomRight) is Corner.BottomLeft or Corner.BottomRight;
+
+        /// <summary>Shows or hides the hidden icons of a fixed-size grid in the tray, after its chevron.</summary>
+        internal void SetExpanded(bool expanded, string reason)
+        {
+            if ((expanded && !_grid.IsFixed) || expanded == _expanded) return;
+            _expanded = expanded;
+            _expandedIcons.Collection = expanded ? _model.Overflow : null;
+            UpdateChevronAngle();
+            QueueBoundsReport();
+            AppLog.Write($"Tray {(expanded ? "expanded" : "collapsed")} ({reason}): {_model.Overflow.Count} hidden icons");
+        }
+
+        /// <summary>The hidden icons are on screen: in the open flyout, or in the expanded tray.</summary>
+        internal bool OverflowShown => _overflow.IsOpen || _expanded;
 
         /// <summary>The chevron's screen rectangle in physical pixels, empty while it is not shown.</summary>
         internal PixelRect ChevronBounds() =>
@@ -823,14 +889,18 @@ namespace FreeSystemTray
 
         private FlyoutAnchor? OverflowAnchor() => _reportedBounds.IsEmpty ? null : new FlyoutAnchor(_reportedBounds, ChevronBounds(), _reportedEdge);
 
+        /// <summary>Shows the hidden icons: expands a fixed-size grid, else opens the flyout.</summary>
         internal void OpenOverflow(string reason)
         {
-            if (_model.Overflow.Count > 0 || _iconDrag != null) _overflow.Open(reason);
+            if (_model.Overflow.Count == 0 && _iconDrag == null) return;
+            if (_grid.IsFixed) SetExpanded(true, reason);
+            else _overflow.Open(reason);
         }
 
         internal void ToggleOverflow(string reason)
         {
             if (_overflow.IsOpen) _overflow.CloseFlyout(reason);
+            else if (_expanded) SetExpanded(false, reason);
             else OpenOverflow(reason);
         }
 

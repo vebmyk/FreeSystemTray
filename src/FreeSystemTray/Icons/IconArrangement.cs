@@ -41,7 +41,7 @@ namespace FreeSystemTray.Icons
     }
 
     /// <param name="Index">The icon's index in the list that was arranged.</param>
-    /// <param name="Spilled">In the flyout only because the tray is full (<see cref="IconSettings.MaxTrayIcons"/>).</param>
+    /// <param name="Spilled">In the flyout only because the tray is full (<see cref="IconSettings.MaxTrayIcons"/>, or the grid's size).</param>
     public readonly record struct ArrangedIcon(int Index, IconPlacement Placement, EffectiveRule Rule, bool Spilled = false);
 
     /// <summary>Where each icon goes and in what order. Pure logic: the same icons and settings always give the same result.</summary>
@@ -52,7 +52,11 @@ namespace FreeSystemTray.Icons
         /// Each group follows <see cref="IconSettings.Order"/>; icons not in it come after, in the
         /// order they are listed in <paramref name="icons"/> (the order they arrived).
         /// </summary>
-        public static IReadOnlyList<ArrangedIcon> Arrange(IReadOnlyList<IconFacts> icons, IconSettings settings)
+        /// <param name="capacity">
+        /// The tray's cells (<see cref="IconGrid.Capacity"/>), 0 for no limit. When more icons are to
+        /// be shown than fit, or some are in the flyout, the last cell is the button that shows them.
+        /// </param>
+        public static IReadOnlyList<ArrangedIcon> Arrange(IReadOnlyList<IconFacts> icons, IconSettings settings, int capacity = 0)
         {
             Dictionary<string, int> order = OrderIndex(settings.Order);
             var placed = new List<(ArrangedIcon Icon, int SortKey)>(icons.Count);
@@ -66,8 +70,13 @@ namespace FreeSystemTray.Icons
 
             var tray = placed.Where(p => p.Icon.Placement == IconPlacement.Tray).OrderBy(p => p.SortKey).ToList();
             var spilled = new List<(ArrangedIcon Icon, int SortKey)>();
-            int max = settings.MaxTrayIcons;
-            if (max > 0 && tray.Count > max)
+            int max = settings.MaxTrayIcons > 0 ? settings.MaxTrayIcons : int.MaxValue;
+            if (capacity > 0)
+            {
+                bool more = tray.Count > Math.Min(max, capacity) || placed.Any(p => p.Icon.Placement == IconPlacement.Overflow);
+                max = Math.Min(max, more ? capacity - 1 : capacity);
+            }
+            if (tray.Count > max)
             {
                 // Icons a rule puts in the tray keep their place before those that are there by default.
                 var kept = new HashSet<int>(tray.Where(p => p.Icon.Rule.Placement == IconPlacement.Tray).Take(max).Select(p => p.Icon.Index));

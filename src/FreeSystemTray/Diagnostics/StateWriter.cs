@@ -74,11 +74,16 @@ namespace FreeSystemTray.Diagnostics
                     ["cornerRadius"] = _window.Layout.CornerRadius,
                     ["spacing"] = _window.Layout.Spacing
                 },
+                ["grid"] = new Dictionary<string, object?>
+                {
+                    ["columns"] = _window.Grid.Columns,
+                    ["rows"] = _window.Grid.Rows,
+                    ["capacity"] = _window.Grid.Capacity
+                },
                 ["theme"] = new Dictionary<string, object?>
                 {
                     ["id"] = _window.Theme.Id,
                     ["name"] = _window.Theme.Name,
-                    ["arrangement"] = _window.Theme.Layout.ToString(),
                     ["blur"] = _window.Theme.Blur.ToString(),
                     ["blurShown"] = _window.BlurShown,
                     ["transparencyEffects"] = _window.TransparencyEffects,
@@ -89,6 +94,7 @@ namespace FreeSystemTray.Diagnostics
                 ["overflow"] = new Dictionary<string, object?>
                 {
                     ["open"] = _window.Overflow.IsOpen,
+                    ["expanded"] = _window.IsExpanded,
                     ["rect"] = overflow.IsEmpty ? null : Rect(overflow),
                     ["count"] = _window.Icons.Overflow.Count
                 },

@@ -24,21 +24,31 @@ namespace FreeSystemTray.Tests
             Assert.Equal(Color.FromRgb(0x6A, 0x6A, 0x6A), t.BorderColor);
             Assert.Equal(Color.FromRgb(0x4A, 0x4A, 0x4A), t.GripColor);
             Assert.Equal(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF), t.HoverColor);
-            Assert.Equal(IconLayout.Row, t.Layout);
-            Assert.Equal(GripPosition.Left, t.EffectiveGripPosition);
+            Assert.Equal(GripPosition.Left, t.GripPositionFor(column: false));
+            Assert.Equal(GripPosition.Top, t.GripPositionFor(column: true));
         }
 
         [Fact]
         public void A_file_changes_only_what_it_lists()
         {
-            var file = new ThemeFile { Background = new() { Opacity = 0.5 }, Icons = new() { Layout = IconLayout.Column } };
+            var file = new ThemeFile { Background = new() { Opacity = 0.5 }, Grip = new() { Position = GripPosition.Right } };
             Theme t = Theme.Default.With(file, "Mine", null, new List<string>());
             Assert.Equal("Mine", t.Id);
             Assert.Equal("Mine", t.Name); // no name: the id
             Assert.Equal(0.5, t.BackgroundOpacity);
             Assert.Equal(Theme.Default.Background, t.Background);
-            Assert.Equal(IconLayout.Column, t.Layout);
-            Assert.Equal(GripPosition.Top, t.EffectiveGripPosition);
+            Assert.Equal(GripPosition.Right, t.GripPositionFor(column: true));
+        }
+
+        [Fact]
+        public void A_layout_in_a_theme_is_reported_and_ignored()
+        {
+            var problems = new List<string>();
+            var file = JsonSerializer.Deserialize<ThemeFile>("{ \"icons\": { \"layout\": \"Grid\", \"gridColumns\": 4, \"spacing\": 2 } }",
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
+            Theme t = Theme.Default.With(file, "x", null, problems);
+            Assert.Equal(2, t.IconSpacing);
+            Assert.Contains(problems, p => p.Contains("no longer part of a theme"));
         }
 
         [Fact]
@@ -72,13 +82,11 @@ namespace FreeSystemTray.Tests
             {
                 Background = new() { Opacity = 7 },
                 Border = new() { CornerRadius = -3 },
-                Icons = new() { GridColumns = 0 },
                 ToolTip = new() { FontSize = 500 }
             };
             Theme t = Theme.Default.With(file, "x", null, new List<string>());
             Assert.Equal(1, t.BackgroundOpacity);
             Assert.Equal(0, t.CornerRadius);
-            Assert.Equal(1, t.GridColumns);
             Assert.Equal(72, t.ToolTipFontSize);
         }
 
@@ -88,7 +96,7 @@ namespace FreeSystemTray.Tests
             Theme original = Theme.Default with
             {
                 Id = "Glassy", Name = "Glassy", Background = Color.FromArgb(0xCC, 1, 2, 3), BackgroundOpacity = 0.4, Blur = TrayBlur.Acrylic,
-                CornerRadius = 8, Layout = IconLayout.Grid, GridColumns = 5, IconSpacing = 2, ToolTipFontFamily = "Consolas", GripPosition = GripPosition.Bottom
+                CornerRadius = 8, IconSpacing = 2, ToolTipFontFamily = "Consolas", GripPosition = GripPosition.Bottom
             };
             var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter() } };
             ThemeFile back = JsonSerializer.Deserialize<ThemeFile>(JsonSerializer.Serialize(original.ToFile(), json), json)!;
@@ -207,39 +215,6 @@ namespace FreeSystemTray.Tests
         public void Dispose()
         {
             if (Directory.Exists(_root)) Directory.Delete(_root, true);
-        }
-    }
-
-    public class IconPanelTests
-    {
-        [Theory]
-        [InlineData(IconLayout.Row, 4, 7, 7, 1)]
-        [InlineData(IconLayout.Column, 4, 7, 1, 7)]
-        [InlineData(IconLayout.Grid, 4, 7, 4, 2)]
-        [InlineData(IconLayout.Grid, 4, 3, 3, 1)]
-        [InlineData(IconLayout.Grid, 4, 8, 4, 2)]
-        [InlineData(IconLayout.Grid, 0, 3, 1, 3)]
-        [InlineData(IconLayout.Row, 4, 0, 0, 0)]
-        public void Icons_take_rows_and_columns_by_layout(IconLayout layout, int columns, int count, int cols, int rows)
-        {
-            Assert.Equal((cols, rows), IconPanel.Grid(layout, columns, count));
-        }
-
-        [Fact]
-        public void A_grid_fills_left_to_right_then_top_to_bottom()
-        {
-            Assert.Equal((0, 0), IconPanel.CellOf(IconLayout.Grid, 3, 0));
-            Assert.Equal((2, 0), IconPanel.CellOf(IconLayout.Grid, 3, 2));
-            Assert.Equal((0, 1), IconPanel.CellOf(IconLayout.Grid, 3, 3));
-            Assert.Equal((0, 4), IconPanel.CellOf(IconLayout.Column, 3, 4));
-        }
-
-        [Fact]
-        public void Spacing_goes_between_cells_only()
-        {
-            Assert.Equal(new Size(3 * 24 + 2 * 2, 24), IconPanel.Extent(IconLayout.Row, 4, 3, new Size(24, 24), 2));
-            Assert.Equal(new Size(2 * 24 + 1 * 2, 2 * 24 + 1 * 2), IconPanel.Extent(IconLayout.Grid, 2, 3, new Size(24, 24), 2));
-            Assert.Equal(new Size(24, 24), IconPanel.Extent(IconLayout.Column, 4, 1, new Size(24, 24), 5));
         }
     }
 

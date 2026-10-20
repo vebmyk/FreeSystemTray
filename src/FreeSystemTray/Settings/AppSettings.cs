@@ -30,6 +30,9 @@ namespace FreeSystemTray.Settings
         /// <summary>Icon size and the size of the tray around the icons.</summary>
         public ScalingSettings Scaling { get; set; } = new();
 
+        /// <summary>How the icons are arranged: a row, a column or a grid, and how many fit before the rest are behind a button.</summary>
+        public LayoutSettings Layout { get; set; } = new();
+
         /// <summary>The theme's id: its file name without ".json", in the themes folder next to this file or among the built-in ones.</summary>
         public string Theme { get; set; } = ThemeStore.DefaultId;
 
@@ -78,6 +81,21 @@ namespace FreeSystemTray.Settings
         /// paths or icon ids.
         /// </summary>
         public List<string> ExeIcons { get; set; } = new();
+    }
+
+    /// <summary>
+    /// The icons' arrangement, columns × rows (see <see cref="IconGrid"/>). 0 means as many as needed:
+    /// 0 × 1 is a row, 1 × 0 a column, 4 × 0 rows of four. With both set the tray has that many cells;
+    /// when more icons are to be shown (or there are hidden icons), the last cell is a button that
+    /// expands the tray with more rows of the same width.
+    /// </summary>
+    public sealed class LayoutSettings
+    {
+        public int Columns { get; set; }
+        public int Rows { get; set; } = 1;
+
+        [JsonIgnore]
+        public IconGrid Grid => new(Columns, Rows);
     }
 
     /// <summary>
@@ -198,6 +216,8 @@ namespace FreeSystemTray.Settings
             AppSettings settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
             settings.ShowHide ??= new ShowHideSettings(); // "showHide": null
             settings.Scaling ??= new ScalingSettings();
+            settings.Layout ??= new LayoutSettings();
+            MigrateLayoutThemes(settings);
             settings.Scaling.IconSize ??= "100%";
             settings.Scaling.TraySize ??= "100%";
             settings.Scaling.ExeIcons ??= new List<string>();
@@ -209,6 +229,24 @@ namespace FreeSystemTray.Settings
             settings.Icons.Order.RemoveAll(string.IsNullOrWhiteSpace);
             if (string.IsNullOrWhiteSpace(settings.Theme)) settings.Theme = ThemeStore.DefaultId;
             return settings;
+        }
+
+        /// <summary>
+        /// The layout used to be part of the theme: the built-in Dark column and Glass grid themes
+        /// are now Dark and Glass with that layout.
+        /// </summary>
+        private static void MigrateLayoutThemes(AppSettings settings)
+        {
+            if (string.Equals(settings.Theme, "DarkColumn", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Theme = "Dark";
+                settings.Layout = new LayoutSettings { Columns = 1, Rows = 0 };
+            }
+            else if (string.Equals(settings.Theme, "GlassGrid", StringComparison.OrdinalIgnoreCase))
+            {
+                settings.Theme = "Glass";
+                settings.Layout = new LayoutSettings { Columns = 4, Rows = 0 };
+            }
         }
     }
 }

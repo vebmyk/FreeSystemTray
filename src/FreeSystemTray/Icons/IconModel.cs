@@ -126,13 +126,16 @@ namespace FreeSystemTray.Icons
         private readonly Dictionary<ITrayIcon, IconItem> _items = new(ReferenceEqualityComparer.Instance);
         private IconSettings _settings;
         private IconSettings? _preview;
+        private int _capacity;
         private List<IconItem> _all = new();
         private bool _queued;
 
-        public IconModel(ITrayHost host, IconSettings settings, Dispatcher dispatcher)
+        /// <param name="capacity">The tray's cells (<see cref="IconGrid.Capacity"/>), 0 for no limit.</param>
+        public IconModel(ITrayHost host, IconSettings settings, Dispatcher dispatcher, int capacity = 0)
         {
             _host = host;
             _settings = settings;
+            _capacity = capacity;
             _dispatcher = dispatcher;
             // The host changes its collection one icon at a time; one arrangement covers them all.
             ((INotifyCollectionChanged)host.Icons).CollectionChanged += (_, _) => QueueArrange();
@@ -154,9 +157,13 @@ namespace FreeSystemTray.Icons
         /// <summary>Raised after every rearrangement.</summary>
         public event EventHandler? Arranged;
 
-        public void ApplySettings(IconSettings settings)
+        /// <summary>The tray's cells (<see cref="IconGrid.Capacity"/>), 0 for no limit.</summary>
+        public int Capacity => _capacity;
+
+        public void ApplySettings(IconSettings settings, int capacity)
         {
             _settings = settings;
+            _capacity = capacity;
             _preview = null;
             Arrange();
         }
@@ -214,7 +221,7 @@ namespace FreeSystemTray.Icons
                 facts.Add(new IconFacts(item.Identity, icon.IsHidden, icon.ExplorerPlacement));
             }
 
-            IReadOnlyList<ArrangedIcon> arranged = IconArrangement.Arrange(facts, Settings);
+            IReadOnlyList<ArrangedIcon> arranged = IconArrangement.Arrange(facts, Settings, _capacity);
             _all = arranged.Select(a => items[a.Index]).ToList();
             foreach (ArrangedIcon a in arranged) items[a.Index].Update(a);
             Sync(Tray, _all.Where(i => i.Placement == IconPlacement.Tray).ToList());

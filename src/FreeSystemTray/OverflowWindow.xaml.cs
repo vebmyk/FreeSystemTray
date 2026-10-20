@@ -25,8 +25,8 @@ namespace FreeSystemTray
     /// </summary>
     public partial class OverflowWindow : Window
     {
-        public static readonly DependencyProperty ColumnsProperty = DependencyProperty.Register(
-            nameof(Columns), typeof(int), typeof(OverflowWindow), new PropertyMetadata(1));
+        public static readonly DependencyProperty GridProperty = DependencyProperty.Register(
+            nameof(Grid), typeof(IconGrid), typeof(OverflowWindow), new PropertyMetadata(new IconGrid(1, 0)));
 
         private readonly ITrayHost _host;
         private readonly IconModel _model;
@@ -67,11 +67,11 @@ namespace FreeSystemTray
             };
         }
 
-        /// <summary>How many columns the icons take: a square-ish grid.</summary>
-        public int Columns
+        /// <summary>How the icons are arranged: a square-ish grid.</summary>
+        public IconGrid Grid
         {
-            get => (int)GetValue(ColumnsProperty);
-            set => SetValue(ColumnsProperty, value);
+            get => (IconGrid)GetValue(GridProperty);
+            set => SetValue(GridProperty, value);
         }
 
         public bool IsOpen => IsVisible;
@@ -142,7 +142,7 @@ namespace FreeSystemTray
             }
         }
 
-        private void UpdateColumns() => Columns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(_model.Overflow.Count)));
+        private void UpdateColumns() => Grid = new IconGrid(Math.Max(1, (int)Math.Ceiling(Math.Sqrt(_model.Overflow.Count))), 0);
 
         #region Placement
 

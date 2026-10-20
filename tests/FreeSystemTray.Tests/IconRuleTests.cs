@@ -59,9 +59,9 @@ namespace FreeSystemTray.Tests
         private static IReadOnlyList<IconFacts> Icons(params IconFacts[] icons) => icons;
 
         /// <summary>"tray: a b | overflow: c | hidden: d".</summary>
-        private static string Layout(IReadOnlyList<IconFacts> icons, IconSettings settings)
+        private static string Layout(IReadOnlyList<IconFacts> icons, IconSettings settings, int capacity = 0)
         {
-            var arranged = IconArrangement.Arrange(icons, settings);
+            var arranged = IconArrangement.Arrange(icons, settings, capacity);
             string Group(IconPlacement p) => string.Join(" ", arranged.Where(a => a.Placement == p).Select(a => icons[a.Index].Identity.ExeName!.Replace(".exe", "")));
             return $"tray: {Group(IconPlacement.Tray)} | overflow: {Group(IconPlacement.Overflow)} | hidden: {Group(IconPlacement.Hidden)}";
         }
@@ -128,6 +128,26 @@ namespace FreeSystemTray.Tests
             Assert.Equal("tray: a d | overflow: b c | hidden: ", Layout(Icons(A, B, C, D), settings));
             var arranged = IconArrangement.Arrange(Icons(A, B, C, D), settings);
             Assert.True(arranged.Single(a => a.Index == 1).Spilled);
+        }
+
+        [Fact]
+        public void A_fixed_grid_keeps_its_last_cell_for_the_button_when_there_is_more_to_show()
+        {
+            var settings = new IconSettings();
+            // Everything fits: no button.
+            Assert.Equal("tray: a b c d | overflow:  | hidden: ", Layout(Icons(A, B, C, D), settings, capacity: 4));
+            // One too many: three icons and the button.
+            Assert.Equal("tray: a b | overflow: c d | hidden: ", Layout(Icons(A, B, C, D), settings, capacity: 3));
+            Assert.True(IconArrangement.Arrange(Icons(A, B, C, D), settings, 3).Single(a => a.Index == 2).Spilled);
+            // Icons in the flyout need the button too.
+            settings.Rules.Add(new IconRule { Match = "d.exe", Placement = IconPlacement.Overflow });
+            Assert.Equal("tray: a b c | overflow: d | hidden: ", Layout(Icons(A, B, C, D), settings, capacity: 4));
+            // The smaller of the two limits wins.
+            settings.MaxTrayIcons = 1;
+            Assert.Equal("tray: a | overflow: b c d | hidden: ", Layout(Icons(A, B, C, D), settings, capacity: 4));
+            // A single cell holds only the button.
+            settings.MaxTrayIcons = 0;
+            Assert.Equal("tray:  | overflow: a b c d | hidden: ", Layout(Icons(A, B, C, D), settings, capacity: 1));
         }
 
         [Fact]

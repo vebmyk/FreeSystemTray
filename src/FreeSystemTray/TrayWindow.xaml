@@ -22,7 +22,8 @@
          theme's values, then the theme's own XAML, which can override both. The hidden-icons flyout
          (OverflowWindow) shares these resources.
          The icon list shows the tray's icons (IconModel.Tray) and then the chevron that opens the
-         flyout; their templates are in TrayStyles.xaml. -->
+         flyout, or in a grid of a fixed size expands the tray with the hidden icons after it; their
+         templates are in TrayStyles.xaml. -->
     <Window.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -51,8 +52,8 @@
                 <ItemsControl x:Name="IconList" Margin="{DynamicResource IconListMargin}" MinWidth="{DynamicResource CellSize}" MinHeight="{DynamicResource CellSize}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <local:IconPanel Layout="{DynamicResource Icons.Layout}"
-                                             Columns="{DynamicResource Icons.Columns}"
+                            <local:IconPanel Grid="{DynamicResource Icons.Grid}"
+                                             ExpandUp="{DynamicResource Icons.ExpandUp}"
                                              Spacing="{DynamicResource Icons.Spacing}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>

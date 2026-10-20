@@ -22,8 +22,7 @@
             <ItemsControl x:Name="IconList" Margin="{DynamicResource OverflowPadding}" MinWidth="{DynamicResource CellSize}" MinHeight="{DynamicResource CellSize}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <local:IconPanel Layout="Grid"
-                                         Columns="{Binding Columns, RelativeSource={RelativeSource AncestorType=local:OverflowWindow}}"
+                        <local:IconPanel Grid="{Binding Grid, RelativeSource={RelativeSource AncestorType=local:OverflowWindow}}"
                                          Spacing="{DynamicResource Icons.Spacing}" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>

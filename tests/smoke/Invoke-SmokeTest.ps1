@@ -17,13 +17,14 @@
       hotkey, click-away, the auto-hide timer, and a menu opened from the tray keeping it shown;
     - scaling: icon and tray sizes set in the settings file, snapping, .exe icons (a click on a
       scaled icon with -SkipMouse left out);
-    - themes: layouts, blur against Windows' transparency setting, a theme of one's own with live
-      edits, --export-theme and --import-theme;
+    - layouts (a column, rows of four) and themes: blur against Windows' transparency setting, a
+      theme of one's own with live edits, --export-theme and --import-theme;
     - with -SkipMouse left out: stepping behind a full-screen window (a new one, and one turning
       full screen like F11) and the hotkey bringing the tray up over it;
     - management: FreeSystemTray's own icon in both trays; icon rules (hidden icons, hidden, a
-      tooltip), an icon Windows hides, the default placement, the saved order and a tray size limit;
-      with -SkipMouse left out also the hidden-icons flyout (open, click an icon in it, close),
+      tooltip), an icon Windows hides, the default placement, the saved order, a tray size limit and
+      a fixed-size grid; with -SkipMouse left out also the hidden-icons flyout (open, click an icon
+      in it, close), expanding and collapsing a fixed-size grid,
       dragging icons (to a new place, onto the chevron), and the tray's own menus staying open and
       taking Esc (the grip's, FreeSystemTray's icon's, Shift+right-click's in the tray and the
       flyout); the settings
@@ -504,13 +505,13 @@ try {
     # --- Themes: built-in ones, the user's own (live edits), import and export -------------
     function Theme-State { return (Read-State $run).theme }
     function Smoke-Rects { return @((Read-State $run).icons | Where-Object { $_.tip -like "Smoke*" -and $_.rect } | ForEach-Object { , @([int]$_.rect[0], [int]$_.rect[1]) }) }
-    Write-Settings '{ "theme": "DarkColumn" }'
-    Check "theme DarkColumn: the icons stand in one column, and the tray keeps its anchor corner" ((Wait-Until {
-        $r = Smoke-Rects; (Theme-State).arrangement -eq "Column" -and $r.Count -ge 4 -and @($r | ForEach-Object { $_[0] } | Sort-Object -Unique).Count -eq 1 } 5000) -and
+    Write-Settings '{ "layout": { "columns": 1, "rows": 0 } }'
+    Check "layout 1 x 0: the icons stand in one column, and the tray keeps its anchor corner" ((Wait-Until {
+        $r = Smoke-Rects; (Read-State $run).grid.columns -eq 1 -and $r.Count -ge 4 -and @($r | ForEach-Object { $_[0] } | Sort-Object -Unique).Count -eq 1 } 5000) -and
         (Corner) -eq $corner) "corner $(Corner), was $corner"
-    Write-Settings '{ "theme": "GlassGrid" }'
-    Check "theme GlassGrid: rows of 4 icons, rounded corners" (Wait-Until {
-        $s = Read-State $run; $s.theme.arrangement -eq "Grid" -and $s.layout.cornerRadius -eq 8 -and
+    Write-Settings '{ "theme": "Glass", "layout": { "columns": 4, "rows": 0 } }'
+    Check "theme Glass in layout 4 x 0: rows of 4 icons, rounded corners" (Wait-Until {
+        $s = Read-State $run; $s.grid.columns -eq 4 -and $s.layout.cornerRadius -eq 8 -and
             @($s.icons | Where-Object { $_.rect } | ForEach-Object { [int]$_.rect[0] } | Sort-Object -Unique).Count -eq 4 } 5000)
     $ts = Theme-State
     Check "a blur theme blurs only while Windows' transparency effects are on, else it is solid" ($ts.blur -eq "Blur" -and $ts.blurShown -eq $ts.transparencyEffects) "blurShown $($ts.blurShown), transparency effects $($ts.transparencyEffects)"
@@ -583,6 +584,9 @@ try {
     Write-Settings '{ "icons": { "maxTrayIcons": 2, "order": [ "TestTrayApp.exe:104", "TestTrayApp.exe:102" ] } }'
     Check "the saved order comes first, and a full tray spills into the hidden icons" (Wait-Until {
         (Tray-Count) -eq 2 -and (Smoke "SmokeD").index -eq 0 -and (Smoke "SmokeB").index -eq 1 -and (Smoke "SmokeA").placement -eq "Overflow" } 5000) "tray: $(Tray-Count)"
+    Write-Settings '{ "layout": { "columns": 2, "rows": 1 } }'
+    Check "layout 2 x 1: one icon and the button that shows the others" (Wait-Until {
+        $s = Read-State $run; (Tray-Count) -eq 1 -and $s.chevron -and $s.grid.capacity -eq 2 -and -not $s.overflow.expanded } 5000) "tray: $(Tray-Count)"
 
     Write-Settings '{ "icons": { "rules": [ { "match": "TestTrayApp.exe:103", "placement": "Overflow" } ] } }'
     [void](Wait-Until { (Smoke "SmokeC").placement -eq "Overflow" -and (Smoke "SmokeA").placement -eq "Tray" -and (Read-State $run).chevron } 5000)
@@ -639,6 +643,20 @@ try {
         Idle
         Tool click-target ([int]$w[0] - 400) ([int]$w[1] - 300) | Out-Null
         [void](Wait-Until { -not (Read-State $run).overflow.open } 3000)
+
+        Write-Settings '{ "layout": { "columns": 2, "rows": 1 } }'
+        [void](Wait-Until { $s = Read-State $run; $s.grid.capacity -eq 2 -and $s.chevron -and (Tray-Count) -eq 1 } 5000)
+        Idle
+        $before = (Read-State $run).window
+        $c = Center (Read-State $run).chevron
+        Tool click $c[0] $c[1] | Out-Null
+        Check "in a fixed-size grid the chevron expands the tray: the other icons show in it, in rows of the same width, and the chevron stays put" (Wait-Until {
+            $s = Read-State $run
+            $s.overflow.expanded -and -not $s.overflow.open -and (Smoke "SmokeC").rect -and [int]$s.window[2] -eq [int]$before[2] -and
+                [int]$s.window[3] -gt [int]$before[3] -and "$(Center $s.chevron)" -eq "$c" } 3000) "window $((Read-State $run).window), was $before"
+        Idle
+        Tool click $c[0] $c[1] | Out-Null
+        Check "and a second click collapses it" (Wait-Until { $s = Read-State $run; -not $s.overflow.expanded -and [int]$s.window[3] -eq [int]$before[3] } 3000)
     }
     Write-Settings '{ }'
     [void](Wait-Until { Test-Icons { param($i) $i.placement -eq "Tray" } } 5000)

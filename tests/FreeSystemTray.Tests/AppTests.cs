@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using FreeSystemTray.Icons;
 using FreeSystemTray.Placement;
 using FreeSystemTray.Scaling;
 using FreeSystemTray.Settings;
@@ -103,6 +104,22 @@ namespace FreeSystemTray.Tests
             Assert.Equal("100%", loaded.TraySize);
             Assert.Empty(loaded.ExeIcons);
             Assert.True(loaded.SnapToPixels);
+        }
+
+        [Fact]
+        public void The_layout_defaults_to_a_row_and_the_old_layout_themes_become_a_layout()
+        {
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(File1, "{ \"layout\": null }");
+            Assert.Equal(IconGrid.Row, new SettingsStore(File1).Load().Layout.Grid);
+            File.WriteAllText(File1, "{ \"theme\": \"GlassGrid\" }");
+            AppSettings loaded = new SettingsStore(File1).Load();
+            Assert.Equal("Glass", loaded.Theme);
+            Assert.Equal(new IconGrid(4, 0), loaded.Layout.Grid);
+            File.WriteAllText(File1, "{ \"theme\": \"darkcolumn\" }");
+            loaded = new SettingsStore(File1).Load();
+            Assert.Equal("Dark", loaded.Theme);
+            Assert.True(loaded.Layout.Grid.IsColumn);
         }
 
         [Fact]

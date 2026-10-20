@@ -91,6 +91,8 @@ namespace FreeSystemTray
                 List<ThemeInfo> themes = _tray.Themes.List().ToList();
                 ThemeBox.ItemsSource = themes;
                 ThemeBox.SelectedItem = themes.FirstOrDefault(t => string.Equals(t.Id, _tray.Theme.Id, StringComparison.OrdinalIgnoreCase));
+                SetText(ColumnsBox, s.Layout.Columns.ToString(CultureInfo.InvariantCulture));
+                SetText(RowsBox, s.Layout.Rows.ToString(CultureInfo.InvariantCulture));
                 if (!IconSizeBox.IsKeyboardFocusWithin) IconSizeBox.Text = s.Scaling.IconSize;
                 if (!TraySizeBox.IsKeyboardFocusWithin) TraySizeBox.Text = s.Scaling.TraySize;
                 SnapToPixelsBox.IsChecked = s.Scaling.SnapToPixels;
@@ -337,6 +339,14 @@ namespace FreeSystemTray
         {
             Directory.CreateDirectory(_tray.Themes.UserDirectory);
             OpenInExplorer(_tray.Themes.UserDirectory);
+        }
+
+        private void GridBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (sender == ColumnsBox && TryParseInt(ColumnsBox, 0, IconGrid.MaxCells, out int columns) && columns != Settings.Layout.Columns)
+                Change(s => s.Layout.Columns = columns);
+            if (sender == RowsBox && TryParseInt(RowsBox, 0, IconGrid.MaxCells, out int rows) && rows != Settings.Layout.Rows)
+                Change(s => s.Layout.Rows = rows);
         }
 
         private void SizeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

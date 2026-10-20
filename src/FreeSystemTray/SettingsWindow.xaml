@@ -133,6 +133,18 @@
                                        Text="Your own themes go in the themes folder; edits to them apply at once. README.md, &quot;Themes&quot;, describes the files." />
                         </StackPanel>
                     </GroupBox>
+                    <GroupBox Header="Layout">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Label}" Text="Columns:" />
+                                <TextBox x:Name="ColumnsBox" Width="44" LostKeyboardFocus="GridBox_Commit" KeyDown="TextBox_EnterCommits" />
+                                <TextBlock Style="{StaticResource Label}" Margin="16,0,8,0" Text="Rows:" />
+                                <TextBox x:Name="RowsBox" Width="44" LostKeyboardFocus="GridBox_Commit" KeyDown="TextBox_EnterCommits" />
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                       Text="0 means as many as needed: 0 × 1 is a row, 1 × 0 a column, 4 × 0 rows of four. With both set the tray keeps that size, and its last cell is a button that shows the icons that do not fit, and the hidden icons, in more rows." />
+                        </StackPanel>
+                    </GroupBox>
                     <GroupBox Header="Size">
                         <Grid>
                             <Grid.ColumnDefinitions>

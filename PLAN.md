@@ -146,6 +146,7 @@ Done on 2026-09-26 on Windows 10 22H2 (build 19045.7725). Results are in `FINDIN
 - 2026-09-26: While a full-screen app (video, game, slide show) is in front on the tray's monitor, the tray drops its always-on-top flag, as Explorer's taskbar does, and gets it back afterwards. Built the same day.
 - 2026-09-26 (Phase 6): a portable build, not an installer: one self-contained exe needs nothing installed, and autostart is already in the settings.
 - 2026-09-26 (Phase 6): after a crash, the watchdog starts the tray again (setting `restartAfterCrash`, on by default); not when the process was ended on purpose, and not more than 3 times in a row while it keeps crashing within 10 minutes of starting.
+- 2026-10-20: The icons' layout (columns × rows) is a setting of its own, not part of a theme: a theme is the look. A grid with both sizes set has a fixed number of cells; what does not fit, and the hidden icons, show when its chevron expands the tray in place (more rows of the same width, away from the anchor corner) instead of in the flyout. The Dark column and Glass grid themes were folded into Dark and Glass.
 
 ## Deliverables
 Source repo with a README, build instructions, a sample theme set, `FINDINGS.md` from Phase 0 (done), the smoke test and the Explorer restart test (`tests/smoke`, built on the Phase 0 test app and harness in `spike/`), a portable build (`tools/Publish.ps1`), and a short test checklist of the apps tested in Phase 0 and Phase 6 (`FINDINGS.md`, Phase 6).

@@ -10,8 +10,8 @@ namespace FreeSystemTray
 {
     /// <summary>
     /// Moves an icon while the left button is held, as in Explorer's tray: over another icon it takes
-    /// that icon's place, over the chevron it goes into the hidden-icons flyout (which opens), and from
-    /// the flyout it can go back into the tray. The icons move as the pointer does, by previewing the
+    /// that icon's place, over the chevron it goes into the hidden-icons flyout (which opens; a grid of
+    /// a fixed size expands instead), and from there it can go back into the tray. The icons move as the pointer does, by previewing the
     /// settings the drop would save (<see cref="IconModel.Preview"/>); the drop saves them. The window
     /// the drag started in captures the mouse, so the pointer can cross over to the other window.
     /// </summary>
@@ -24,6 +24,7 @@ namespace FreeSystemTray
         private readonly IconSettings _original;
         private readonly IconPlacement _startPlacement;
         private readonly bool _overflowWasOpen;
+        private readonly bool _trayWasExpanded;
         private (IconPlacement Group, int Index)? _target;
         private bool _ended;
 
@@ -37,6 +38,7 @@ namespace FreeSystemTray
             _original = model.Settings.Clone();
             _startPlacement = item.Placement;
             _overflowWasOpen = overflow.IsOpen;
+            _trayWasExpanded = tray.IsExpanded;
         }
 
         public IconItem Item { get; }
@@ -87,11 +89,15 @@ namespace FreeSystemTray
                 if (_tray.ChevronBounds() is { IsEmpty: false } chevron && chevron.Contains(cursor))
                 {
                     target = (IconPlacement.Overflow, _model.Overflow.Count(i => i != Item));
-                    if (!_overflow.IsOpen) _tray.OpenOverflow("dragging an icon onto the chevron");
+                    if (!_tray.OverflowShown) _tray.OpenOverflow("dragging an icon onto the chevron");
                 }
                 else if (_model.Tray.FirstOrDefault(i => _tray.CellOf(i) is { IsVisible: true } c && c.ScreenBounds().Contains(cursor)) is { } over)
                 {
                     target = IndexAt(IconPlacement.Tray, over);
+                }
+                else if (_tray.IsExpanded && _model.Overflow.FirstOrDefault(i => _tray.CellOf(i) is { IsVisible: true } c && c.ScreenBounds().Contains(cursor)) is { } hidden)
+                {
+                    target = IndexAt(IconPlacement.Overflow, hidden);
                 }
                 else if (_model.Tray.All(i => i == Item))
                 {
@@ -140,6 +146,7 @@ namespace FreeSystemTray
 
             bool droppedInFlyout = NativeMethods.GetCursorPos(out NativeMethods.POINT p) && _overflow.ScreenBounds.Contains(new PixelPoint(p.X, p.Y));
             if (_overflow.IsOpen && !_overflowWasOpen && !droppedInFlyout) _overflow.CloseFlyout("icon dropped elsewhere");
+            if (_tray.IsExpanded && !_trayWasExpanded && _target?.Group != IconPlacement.Overflow) _tray.SetExpanded(false, "icon dropped in the tray");
             Ended?.Invoke(this, commit && _target != null ? _model.Settings : null);
         }
     }

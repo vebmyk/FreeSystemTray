@@ -5,6 +5,25 @@ The newest phase comes first: Phase 6 (robustness and polish), Phase 5 (manageme
 and placement). The Phase 0 feasibility report follows unchanged, apart from notes where Phase 1
 corrected it.
 
+## After Phase 6: layout setting and expanding grid
+
+Date: 2026-10-20. Windows 10 Pro 22H2 (build 19045), same machine. The layout (columns × rows) left the
+theme and became a setting of its own; a grid with both sizes set expands in place from its chevron
+instead of opening the flyout (PLAN.md, Decisions).
+
+| Check | Result |
+|---|---|
+| Unit tests (306, new: `IconGridTests`, grid capacity in arrangement, settings migration) | ✅ |
+| Smoke test, full (with mouse) | 109 passed, 1 failed: "icons without a rule in the hidden icons". The log shows the settings write was picked up about 5 s late (22:44:59), just after the check's 5 s wait; applied, it was right. Not related to the layout change. |
+| Smoke test again, `-SkipMouse` | ✅ 74 of 74, that check included. |
+| Layout 1 × 0, and Glass in 4 × 0 | ✅ A column with the anchor corner kept; rows of four. |
+| Layout 2 × 1 | ✅ One icon and the chevron; the rest behind it. |
+| Chevron in a fixed grid (mouse) | ✅ The tray expands with the other icons in rows of the same width, the chevron stays at the same screen position (tray anchored bottom-right: it grows upwards); a second click collapses it. |
+
+Not tested: dragging icons within an expanded grid, a grid whose own cells are not all used (it
+shrinks to fit, so expanding can widen it and move the chevron), the settings window's new boxes by
+hand.
+
 ## Phase 6: robustness and polish
 
 Date: 2026-09-26. Same machine and setup as before (Windows 10 Pro 22H2, build 19045.7725, one
