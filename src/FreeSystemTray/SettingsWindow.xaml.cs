@@ -188,7 +188,9 @@ namespace FreeSystemTray
                 keys.Add(item.Key);
                 keys.Add(item.Id);
                 if (item.Identity.Guid != Guid.Empty) keys.Add(item.Identity.Guid.ToString());
-                IconRow row = RowFor(item.Key);
+                // Icons can share a key (two copies of an app, same exe and uID): one row, as one rule covers them.
+                IconRow row = RowFor(item.Key, wanted);
+                if (wanted.Contains(row)) continue;
                 row.Update(item.Name, item.Identity.ExeName ?? "", StatusOf(item), item.Image, true, item.Rule);
                 wanted.Add(row);
             }
@@ -198,7 +200,7 @@ namespace FreeSystemTray
                 if (match.Length == 0 || keys.Contains(match) || wanted.Any(r => string.Equals(r.Key, match, StringComparison.OrdinalIgnoreCase))) continue;
                 int applies = model.All.Count(i => i.Identity.MatchStrength(match) > 0);
                 var effective = new EffectiveRule(rule.Placement, rule.Label, rule.Tooltip);
-                IconRow row = RowFor(match);
+                IconRow row = RowFor(match, wanted);
                 row.Update(rule.Label ?? match, "", applies > 0 ? $"rule for {applies} icon{(applies == 1 ? "" : "s")}" : "not running",
                            null, false, effective);
                 wanted.Add(row);
@@ -220,8 +222,9 @@ namespace FreeSystemTray
             LoadDetails();
         }
 
-        private IconRow RowFor(string key) =>
-            _rows.FirstOrDefault(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase)) ?? new IconRow(key, RowChoiceChanged);
+        private IconRow RowFor(string key, List<IconRow> wanted) =>
+            wanted.FirstOrDefault(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase))
+            ?? _rows.FirstOrDefault(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase)) ?? new IconRow(key, RowChoiceChanged);
 
         private static string StatusOf(IconItem item)
         {
