@@ -227,6 +227,14 @@ namespace FreeSystemTray.Theming
                 _watcher.Created += restart;
                 _watcher.Deleted += restart;
                 _watcher.Renamed += (s, e) => restart(s, e);
+                // Windows dropped notifications (its buffer overflowed, or the folder became unreachable):
+                // a change may have been missed, so say so and load the theme again.
+                _watcher.Error += (_, e) => dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+                {
+                    log($"Watching {directory} for theme changes failed ({e.GetException().Message}); loading the theme again");
+                    _debounce.Stop();
+                    _debounce.Start();
+                });
                 _watcher.EnableRaisingEvents = true;
             }
             catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)

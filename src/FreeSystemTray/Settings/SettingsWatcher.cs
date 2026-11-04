@@ -39,6 +39,13 @@ namespace FreeSystemTray.Settings
                 _watcher.Changed += changed;
                 _watcher.Created += changed;
                 _watcher.Renamed += (_, _) => dispatcher.BeginInvoke(DispatcherPriority.Background, Restart);
+                // Windows dropped notifications (its buffer overflowed, or the folder became unreachable):
+                // a change may have been missed, so say so and read the file again.
+                _watcher.Error += (_, e) => dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+                {
+                    _log($"Watching {full} for changes failed ({e.GetException().Message}); reading it again");
+                    Restart();
+                });
                 _watcher.EnableRaisingEvents = true;
             }
             catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
