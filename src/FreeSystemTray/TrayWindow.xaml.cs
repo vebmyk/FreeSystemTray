@@ -190,6 +190,8 @@ namespace FreeSystemTray
             _settings = settings;
             _grid = settings.Layout.Grid;
             if (!_grid.IsFixed) SetExpanded(false, "the grid has no fixed size");
+            // A fixed-size grid shows its hidden icons in place, not in the flyout.
+            else _overflow.CloseFlyout("the grid has a fixed size");
             UpdateGrip();
             QueuePlacement();
             ShowHide?.ApplySettings(settings.ShowHide);
