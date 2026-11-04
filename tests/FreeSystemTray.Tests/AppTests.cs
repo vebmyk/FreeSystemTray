@@ -176,6 +176,20 @@ namespace FreeSystemTray.Tests
             Assert.Equal("{ not json", File.ReadAllText(File1 + ".bad"));
         }
 
+        [Fact]
+        public void A_file_edited_by_hand_may_have_comments_and_trailing_commas()
+        {
+            // As theme files, and as the watchdog reads "restartAfterCrash": not thrown away as broken.
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(File1, "{\n  // tray in the corner\n  \"lockPosition\": true,\n  \"showHide\": { \"autoHide\": true, },\n}");
+
+            AppSettings loaded = new SettingsStore(File1).Load();
+
+            Assert.True(loaded.LockPosition);
+            Assert.True(loaded.ShowHide.AutoHide);
+            Assert.False(File.Exists(File1 + ".bad"));
+        }
+
         public void Dispose()
         {
             if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
