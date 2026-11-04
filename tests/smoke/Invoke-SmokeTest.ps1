@@ -541,6 +541,20 @@ try {
 
     # --- Management: the app's own icon, icon rules, the flyout, dragging, the settings window --
     function Smoke([string]$name) { Our-Icon $run $name }
+    # An icon's rectangle once the tray has stopped moving it: the same in two reads of state.json
+    # 400 ms apart (it is written every 250 ms). Right after a drag the icons shift, and a rectangle
+    # read too soon is where another icon is now (a Shift+right-click once landed on FreeSystemTray's own).
+    function Settled-Rect([string]$name) {
+        $last = $null
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline) {
+            $r = (Smoke $name).rect
+            if ($r -and $last -and (($r -join ",") -eq ($last -join ","))) { return $r }
+            $last = $r
+            Start-Sleep -Milliseconds 400
+        }
+        return $last
+    }
     function Tray-Count { @((Read-State $run).icons | Where-Object { $_.placement -eq "Tray" }).Count }
     function Saved-Icons { (Get-Content (Join-Path $OutDir "settings.json") -Raw | ConvertFrom-Json).icons }
     function Explorer-Has-Ours { [bool](Tool explorer-icons | Select-String "'FreeSystemTray' owner=") }
@@ -620,7 +634,7 @@ try {
         Check "dragging an icon onto the chevron puts it in the hidden icons, as a rule" ((Wait-Until { (Smoke "SmokeA").placement -eq "Overflow" } 3000) -and
             @((Saved-Icons).rules | Where-Object { $_.match -eq "TestTrayApp.exe:101" -and $_.placement -eq "Overflow" }).Count -eq 1)
 
-        $d = Center (Smoke "SmokeD").rect
+        $d = Center (Settled-Rect "SmokeD")
         $heard = @(Select-String -Path (Join-Path $OutDir "testtray-SmokeD.log") -Pattern "MENU OPEN|WM_RBUTTON").Count
         Check "Shift+right-click opens the tray's menu for the icon (it stays open; Esc closes it), and its app hears nothing of it" ((Menu-Stays-Open "Icon menu for SmokeD.*" {
             Tool click $d[0] $d[1] right shift | Out-Null }) -and
