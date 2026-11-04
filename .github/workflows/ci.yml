@@ -1,0 +1,49 @@
+# Builds the solution and runs the unit tests on Windows. The smoke tests (tests/smoke) are not run
+# here: they drive the real mouse, keyboard and Explorer, which a hosted runner does not offer.
+name: CI
+
+on:
+  push:
+    branches: [main, master, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore FreeSystemTray.sln
+
+      - name: Build
+        run: dotnet build FreeSystemTray.sln --no-restore -c Release -warnaserror
+
+      - name: Unit tests
+        run: >
+          dotnet test tests/FreeSystemTray.Tests/FreeSystemTray.Tests.csproj --no-build -c Release
+          --logger "trx;LogFileName=unit-tests.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/*.trx
+          if-no-files-found: ignore
