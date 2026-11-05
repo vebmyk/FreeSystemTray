@@ -42,6 +42,17 @@ The first run's failures, from its log:
 
 The rerun passed everything, so 2 to 5 were the environment of the first run, as far as can be told.
 
+Two more runs with the watcher logging and the Shift+right-click fix: each failed one check, a
+different one each time, and all checks passed across the runs.
+
+- **"Dragging an icon onto another"** failed with SmokeB in the right place. During a drag the tray
+  shows the preview arrangement, so the wait for SmokeB's place could end before the drop saved the
+  order, and the saved order was then read too soon. A race in the test: it now waits for the place
+  and the saved order together. The check after it (dragging onto the chevron, then reading the saved
+  rule) had the same race and was fixed the same way.
+- **exeIcons** failed again in one run and passed in the other. The code shows no timing cause, and
+  the check said nothing about which icon was off; it now lists them when it fails. Open.
+
 ## After Phase 6: layout setting and expanding grid
 
 Date: 2026-10-20. Windows 10 Pro 22H2 (build 19045), same machine. The layout (columns × rows) left the
