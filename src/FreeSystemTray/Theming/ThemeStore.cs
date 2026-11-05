@@ -121,7 +121,7 @@ namespace FreeSystemTray.Theming
         /// <summary>
         /// Copies a theme file (and a XAML file it names next to it) into the user's theme folder. The
         /// theme's id is the file's name. False, with the reason in <paramref name="problems"/>, if it
-        /// is not a readable theme.
+        /// is not a readable theme, or its XAML file would land outside the themes folder.
         /// </summary>
         public bool Import(string source, out string id, List<string> problems)
         {
@@ -132,19 +132,27 @@ namespace FreeSystemTray.Theming
                 return false;
             }
             if (Read(source, problems) is not ThemeFile file) return false;
+            string? xaml = null, xamlTarget = null;
+            if (!string.IsNullOrWhiteSpace(file.Xaml) && !Path.IsPathRooted(file.Xaml))
+            {
+                xaml = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(source))!, file.Xaml);
+                xamlTarget = Path.GetFullPath(Path.Combine(UserDirectory, file.Xaml));
+                // "xaml": "..\\settings.json" would otherwise overwrite a file outside the themes folder.
+                if (!IsInside(xamlTarget, UserDirectory))
+                {
+                    problems.Add($"{source}: its XAML file \"{file.Xaml}\" must be in the theme's folder or below it");
+                    return false;
+                }
+            }
             Directory.CreateDirectory(UserDirectory);
             string target = Path.Combine(UserDirectory, id + ".json");
             if (!string.Equals(Path.GetFullPath(source), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase))
                 File.Copy(source, target, true);
-            if (!string.IsNullOrWhiteSpace(file.Xaml) && !Path.IsPathRooted(file.Xaml))
+            if (xaml != null && xamlTarget != null && File.Exists(xaml) &&
+                !string.Equals(Path.GetFullPath(xaml), xamlTarget, StringComparison.OrdinalIgnoreCase))
             {
-                string xaml = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(source))!, file.Xaml);
-                string xamlTarget = Path.Combine(UserDirectory, file.Xaml);
-                if (File.Exists(xaml) && !string.Equals(Path.GetFullPath(xaml), Path.GetFullPath(xamlTarget), StringComparison.OrdinalIgnoreCase))
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(xamlTarget)!);
-                    File.Copy(xaml, xamlTarget, true);
-                }
+                Directory.CreateDirectory(Path.GetDirectoryName(xamlTarget)!);
+                File.Copy(xaml, xamlTarget, true);
             }
             return true;
         }
@@ -166,6 +174,12 @@ namespace FreeSystemTray.Theming
                 file.Xaml = Path.GetFileName(theme.XamlPath);
             }
             File.WriteAllText(target, JsonSerializer.Serialize(file, Json));
+        }
+
+        private static bool IsInside(string fullPath, string directory)
+        {
+            string dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) + Path.DirectorySeparatorChar;
+            return fullPath.StartsWith(dir, StringComparison.OrdinalIgnoreCase);
         }
 
         private static ThemeFile? Read(string path, List<string> problems)
@@ -213,6 +227,14 @@ namespace FreeSystemTray.Theming
                 _watcher.Created += restart;
                 _watcher.Deleted += restart;
                 _watcher.Renamed += (s, e) => restart(s, e);
+                // Windows dropped notifications (its buffer overflowed, or the folder became unreachable):
+                // a change may have been missed, so say so and load the theme again.
+                _watcher.Error += (_, e) => dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+                {
+                    log($"Watching {directory} for theme changes failed ({e.GetException().Message}); loading the theme again");
+                    _debounce.Stop();
+                    _debounce.Start();
+                });
                 _watcher.EnableRaisingEvents = true;
             }
             catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)

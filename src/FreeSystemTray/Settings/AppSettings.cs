@@ -131,7 +131,11 @@ namespace FreeSystemTray.Settings
         public int AnimationMs { get; set; } = 150;
     }
 
-    /// <summary>Loads and saves <see cref="AppSettings"/> as JSON.</summary>
+    /// <summary>
+    /// Loads and saves <see cref="AppSettings"/> as JSON. Comments and trailing commas in a file edited
+    /// by hand are accepted, as in theme files and the watchdog's own reading of the file (they are not
+    /// kept when the app saves).
+    /// </summary>
     public sealed class SettingsStore
     {
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -139,6 +143,8 @@ namespace FreeSystemTray.Settings
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = true,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
             Converters = { new JsonStringEnumConverter() }
         };
 
@@ -169,7 +175,8 @@ namespace FreeSystemTray.Settings
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
             {
                 log?.Invoke($"Settings file {FilePath} could not be read ({ex.Message}); using defaults");
-                try { File.Copy(FilePath, FilePath + ".bad", true); } catch (IOException) { }
+                // An unreadable file (no access) usually cannot be copied either: start with the defaults anyway.
+                try { File.Copy(FilePath, FilePath + ".bad", true); } catch (Exception copy) when (copy is IOException or UnauthorizedAccessException) { }
                 return new AppSettings();
             }
         }

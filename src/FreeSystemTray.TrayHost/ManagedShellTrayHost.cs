@@ -750,7 +750,16 @@ namespace FreeSystemTray.TrayHost
                     _dispatcher.BeginInvoke(DispatcherPriority.Background, () => Log("Reading Explorer's tray failed: " + ex.Message));
                 }
                 var read = new ExplorerRead(explorer, buttons, started, Stopwatch.GetTimestamp());
-                string? removed = removeDead && buttons != null ? RemoveDeadIconsFromExplorer(explorer, buttons) : null;
+                string? removed = null;
+                try
+                {
+                    if (removeDead && buttons != null) removed = RemoveDeadIconsFromExplorer(explorer, buttons);
+                }
+                catch (Exception ex)
+                {
+                    removed = "Removing dead icons from Explorer's tray failed: " + ex.Message;
+                }
+                // Always applied: it clears _explorerReadRunning, without which no read would start again.
                 _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
                 {
                     if (removed != null) Log(removed);
@@ -953,16 +962,26 @@ namespace FreeSystemTray.TrayHost
             // Explorer's answers are waited for on a thread-pool thread, not here.
             Task.Run(() =>
             {
-                var results = adds.Select(a =>
+                string outcome;
+                try
                 {
-                    IntPtr? r = SendCopyData(explorer, ours, TrayCopyData.NotifyIcon, a.Add);
-                    if (a.Version != null && r is IntPtr v && v != IntPtr.Zero) SendCopyData(explorer, ours, TrayCopyData.NotifyIcon, a.Version);
-                    return $"'{a.Title}' -> {Describe(r)}";
-                }).ToList();
+                    var results = adds.Select(a =>
+                    {
+                        IntPtr? r = SendCopyData(explorer, ours, TrayCopyData.NotifyIcon, a.Add);
+                        if (a.Version != null && r is IntPtr v && v != IntPtr.Zero) SendCopyData(explorer, ours, TrayCopyData.NotifyIcon, a.Version);
+                        return $"'{a.Title}' -> {Describe(r)}";
+                    }).ToList();
+                    outcome = $"Gave Explorer's new tray {adds.Count} icon(s) it lacked: {string.Join("; ", results)}";
+                }
+                catch (Exception ex)
+                {
+                    outcome = $"Giving Explorer's new tray {adds.Count} icon(s) it lacked failed: {ex.Message}";
+                }
+                // The icon handles are destroyed whatever happened.
                 _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
                 {
                     foreach (IntPtr h in created) NativeMethods.DestroyIcon(h);
-                    Log($"Gave Explorer's new tray {adds.Count} icon(s) it lacked: {string.Join("; ", results)}");
+                    Log(outcome);
                 });
             });
         }

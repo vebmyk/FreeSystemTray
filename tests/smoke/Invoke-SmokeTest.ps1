@@ -497,7 +497,12 @@ try {
         $s = Read-State $run
         $explorer = @($s.icons | Where-Object { $_.process -eq "explorer" -and $_.drawnPx })
         $explorer.Count -gt 0 -and -not ($explorer | Where-Object { $_.drawnPx -ne 48 -or $_.drawnFromPx -ne 48 }) -and
-            (Test-Icons { param($i) $i.drawnPx -eq 48 -and $i.drawnFromPx -eq 16 }) } 5000)
+            (Test-Icons { param($i) $i.drawnPx -eq 48 -and $i.drawnFromPx -eq 16 }) } 5000) (
+        # Which icons are off, should it fail: this check has failed now and then with no clue why.
+        @((Read-State $run).icons | Where-Object {
+            ($_.process -eq "explorer" -and $_.drawnPx -and ($_.drawnPx -ne 48 -or $_.drawnFromPx -ne 48)) -or
+            ($_.tip -like "Smoke*" -and ($_.drawnPx -ne 48 -or $_.drawnFromPx -ne 16)) } |
+            ForEach-Object { "'$($_.tip)' [$($_.process)] $($_.placement) drawn $($_.drawnPx) px from $($_.drawnFromPx) px" }) -join "; ")
     Write-Settings '{ }'
     Check "back to 100%: 16 px icons in 24 px cells, in the same place" ((Wait-Until { Test-Icons { param($i) $i.drawnPx -eq 16 -and $i.rect[2] -eq 24 } } 5000) -and
         (Corner) -eq $corner) "corner $(Corner), was $corner"
@@ -541,6 +546,20 @@ try {
 
     # --- Management: the app's own icon, icon rules, the flyout, dragging, the settings window --
     function Smoke([string]$name) { Our-Icon $run $name }
+    # An icon's rectangle once the tray has stopped moving it: the same in two reads of state.json
+    # 400 ms apart (it is written every 250 ms). Right after a drag the icons shift, and a rectangle
+    # read too soon is where another icon is now (a Shift+right-click once landed on FreeSystemTray's own).
+    function Settled-Rect([string]$name) {
+        $last = $null
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline) {
+            $r = (Smoke $name).rect
+            if ($r -and $last -and (($r -join ",") -eq ($last -join ","))) { return $r }
+            $last = $r
+            Start-Sleep -Milliseconds 400
+        }
+        return $last
+    }
     function Tray-Count { @((Read-State $run).icons | Where-Object { $_.placement -eq "Tray" }).Count }
     function Saved-Icons { (Get-Content (Join-Path $OutDir "settings.json") -Raw | ConvertFrom-Json).icons }
     function Explorer-Has-Ours { [bool](Tool explorer-icons | Select-String "'FreeSystemTray' owner=") }
@@ -611,16 +630,20 @@ try {
         $from = Center (Smoke "SmokeB").rect; $to = Center $target.rect
         Idle
         Tool drag $from[0] $from[1] $to[0] $to[1] | Out-Null
-        Check "dragging an icon onto another moves it to that place and saves the order; its app hears no click" ((Wait-Until { (Smoke "SmokeB").index -eq $target.index } 3000) -and
-            (Saved-Icons).order -contains "TestTrayApp.exe:102" -and @(Select-String -Path (Join-Path $OutDir "testtray-SmokeB.log") -Pattern "NIN_SELECT").Count -eq $selects) "SmokeB at $((Smoke 'SmokeB').index), expected $($target.index)"
+        # While the icon is dragged the tray already shows where it would go (a preview), so the place
+        # alone can be right before the drop has saved anything: wait for the saved order too.
+        $moved = Wait-Until { (Smoke "SmokeB").index -eq $target.index -and (Saved-Icons).order -contains "TestTrayApp.exe:102" } 3000
+        $heardSelects = @(Select-String -Path (Join-Path $OutDir "testtray-SmokeB.log") -Pattern "NIN_SELECT").Count
+        Check "dragging an icon onto another moves it to that place and saves the order; its app hears no click" ($moved -and $heardSelects -eq $selects) "SmokeB at $((Smoke 'SmokeB').index), expected $($target.index); saved order: $((Saved-Icons).order -join ', '); NIN_SELECT $heardSelects, was $selects"
 
         $from = Center (Smoke "SmokeA").rect; $to = Center (Read-State $run).chevron
         Idle
         Tool drag $from[0] $from[1] $to[0] $to[1] | Out-Null
-        Check "dragging an icon onto the chevron puts it in the hidden icons, as a rule" ((Wait-Until { (Smoke "SmokeA").placement -eq "Overflow" } 3000) -and
-            @((Saved-Icons).rules | Where-Object { $_.match -eq "TestTrayApp.exe:101" -and $_.placement -eq "Overflow" }).Count -eq 1)
+        # As above: the preview shows it in the hidden icons before the drop saves the rule.
+        Check "dragging an icon onto the chevron puts it in the hidden icons, as a rule" (Wait-Until { (Smoke "SmokeA").placement -eq "Overflow" -and
+            @((Saved-Icons).rules | Where-Object { $_.match -eq "TestTrayApp.exe:101" -and $_.placement -eq "Overflow" }).Count -eq 1 } 3000) "SmokeA $((Smoke 'SmokeA').placement); saved rules: $(@((Saved-Icons).rules | ForEach-Object { "$($_.match)=$($_.placement)" }) -join ', ')"
 
-        $d = Center (Smoke "SmokeD").rect
+        $d = Center (Settled-Rect "SmokeD")
         $heard = @(Select-String -Path (Join-Path $OutDir "testtray-SmokeD.log") -Pattern "MENU OPEN|WM_RBUTTON").Count
         Check "Shift+right-click opens the tray's menu for the icon (it stays open; Esc closes it), and its app hears nothing of it" ((Menu-Stays-Open "Icon menu for SmokeD.*" {
             Tool click $d[0] $d[1] right shift | Out-Null }) -and

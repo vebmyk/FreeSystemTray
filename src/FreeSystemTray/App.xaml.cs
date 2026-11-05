@@ -161,7 +161,19 @@ namespace FreeSystemTray
                 _stateWriter = new StateWriter(_host, window, _options.DiagDir, () => _appIcon.IsShown, () => _settingsWindow);
                 HwndSource.FromHwnd(new WindowInteropHelper(window).EnsureHandle())?.AddHook(DebugHook);
             }
-            if (!_options.NoWatchdog) Watchdog.Launch(logDir, _options.Args, _options.AfterCrash);
+            if (!_options.NoWatchdog)
+            {
+                // The tray host already holds the role: failing to start the watchdog (the exe was
+                // replaced or blocked) must not take the tray down with an unhandled exception.
+                try
+                {
+                    Watchdog.Launch(logDir, _options.Args, _options.AfterCrash);
+                }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+                {
+                    AppLog.Write("Could not start the watchdog; a crash will not hand the icons back to Explorer: " + ex.Message);
+                }
+            }
         }
 
         /// <summary>Opens the settings window, or brings it to the front; at an icon if <paramref name="iconKey"/> is given.</summary>

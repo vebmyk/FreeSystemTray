@@ -199,6 +199,39 @@ namespace FreeSystemTray.Tests
         }
 
         [Fact]
+        public void Import_refuses_a_xaml_file_that_would_land_outside_the_themes_folder()
+        {
+            string src = Path.Combine(_root, "incoming", "deeper");
+            Directory.CreateDirectory(src);
+            // Relative to the source, this is incoming\victim.txt; relative to the themes folder, _root\victim.txt.
+            string escape = Path.Combine("..", "victim.txt").Replace("\\", "\\\\");
+            Write(src, "Sneaky", "{ \"name\": \"Sneaky\", \"xaml\": \"" + escape + "\" }");
+            File.WriteAllText(Path.Combine(_root, "incoming", "victim.txt"), "replacement");
+            File.WriteAllText(Path.Combine(_root, "victim.txt"), "original");
+
+            var problems = new List<string>();
+            Assert.False(Store.Import(Path.Combine(src, "Sneaky.json"), out _, problems));
+
+            Assert.Equal("original", File.ReadAllText(Path.Combine(_root, "victim.txt")));
+            Assert.False(File.Exists(Path.Combine(User, "Sneaky.json")));
+            Assert.Contains(problems, p => p.Contains("must be in the theme's folder"));
+        }
+
+        [Fact]
+        public void Import_copies_a_xaml_file_in_a_subfolder()
+        {
+            string src = Path.Combine(_root, "incoming");
+            Directory.CreateDirectory(Path.Combine(src, "parts"));
+            string relative = Path.Combine("parts", "Sub.xaml");
+            Write(src, "Sub", "{ \"xaml\": \"" + relative.Replace("\\", "\\\\") + "\" }");
+            File.WriteAllText(Path.Combine(src, relative), "<ResourceDictionary />");
+
+            Assert.True(Store.Import(Path.Combine(src, "Sub.json"), out _, new List<string>()));
+
+            Assert.True(File.Exists(Path.Combine(User, relative)));
+        }
+
+        [Fact]
         public void An_export_needs_no_other_theme()
         {
             Write(User, "Mine", "{ \"basedOn\": \"Glass\", \"border\": { \"cornerRadius\": 3 } }");

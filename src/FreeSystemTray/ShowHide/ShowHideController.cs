@@ -219,6 +219,9 @@ namespace FreeSystemTray.ShowHide
                 _window.Show();
             }
             _window.BringToTop();
+            // As when hiding: no blur behind the fading tray. Usually still off from the last hide, but
+            // not the first time a tray that started hidden (auto-hide) is shown.
+            _window.SetEffectsSuspended(true);
             _animator.Run(1, kind, AnimationDuration(), _window.Edge, () =>
             {
                 _window.SetEffectsSuspended(false); // the blur is back once the tray is fully shown

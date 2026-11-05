@@ -42,7 +42,8 @@ Manager's Startup tab lists it.
 
 Settings are in `%LOCALAPPDATA%\FreeSystemTray\settings.json` and logs in
 `%LOCALAPPDATA%\FreeSystemTray\logs` (in a portable copy, in `data` next to the exe). Edits to the
-settings file apply while the app runs.
+settings file apply while the app runs. It may have comments and trailing commas, as theme files may;
+the app does not keep them when it saves.
 
 A second copy of the exe runs as a watchdog. If the tray process crashes or is killed, the watchdog
 hands the icons back to Explorer. After a crash it also starts FreeSystemTray again, unless it keeps
@@ -247,6 +248,7 @@ see on the Light theme.
 `FreeSystemTray.exe --export-theme FILE` writes the current theme with every value spelled out (and
 copies its XAML next to it), so it can be shared or used as a start. `--import-theme FILE` copies a
 theme (and its XAML) into your themes folder and selects it; a running tray switches to it at once.
+A theme whose XAML would land outside the themes folder (`"xaml": "..\\other.xaml"`) is not imported.
 Both write what happened to the log and exit with 1 if they fail.
 
 ### Command line

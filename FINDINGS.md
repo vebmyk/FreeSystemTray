@@ -5,6 +5,54 @@ The newest phase comes first: Phase 6 (robustness and polish), Phase 5 (manageme
 and placement). The Phase 0 feasibility report follows unchanged, apart from notes where Phase 1
 corrected it.
 
+## After Phase 6: code audit fixes and CI
+
+Date: 2026-11-04. Windows 10 Pro 22H2 (build 19045.7807), same machine. A code audit fixed failures
+that could end the tray or quietly stop part of it (the log writer's thread, the background reads of
+Explorer's tray, starting the watchdog, an unreadable settings file), made the settings file accept
+comments and trailing commas, refused theme imports whose XAML would land outside the themes folder,
+turned the blur off during the first show of a tray that started hidden, and closed the flyout when
+the layout becomes a fixed grid. CI (GitHub Actions, `windows-latest`) now builds the solution and runs
+the unit tests on every push and pull request.
+
+| Check | Result |
+|---|---|
+| Unit tests (309, 3 new) on GitHub's `windows-latest` runner | ✅ |
+| Smoke test, full (with mouse), first run | 7 failed; none traced to the changes (below). |
+| Smoke test again, same build | ✅ All checks passed. |
+
+The first run's failures, from its log:
+
+1. **Shift+right-click on SmokeD opened the menu of FreeSystemTray's own icon.** Dragging SmokeA into
+   the hidden icons had just moved the tray's icons along by one, and the test took SmokeD's rectangle
+   from `state.json` before it was rewritten. A race in the test, not the app: it now waits until the
+   rectangle is the same in two reads 400 ms apart.
+2. **A theme edit was never applied** (and so the next check, a broken edit, found the old values).
+   The theme folder's watcher reported no change for that write; the following one arrived. Nothing in
+   the log said a notification was lost, so the settings and theme watchers now log their error event
+   (Windows dropped notifications) and read their files again.
+3. **Explorer's own tray did not look as expected:** SmokeD's tooltip change was accepted by Explorer
+   (`MIRROR MODIFY … explorer=1`) but the test did not read it back from Explorer's toolbar, and after
+   SmokeA was hidden there Explorer still showed a visible button for it in the flyout (likely a second
+   one). Explorer's state on this machine at the time, not ours.
+4. **exeIcons** failed with the settings applied at once; the log does not say which icon. Explorer
+   had an extra icon in this run ("apps are using your microphone").
+5. **The icon rules check** (SmokeC in the flyout, SmokeD hidden, SmokeB's tooltip replaced) failed
+   although the settings were applied at once. The log does not say which part; not explained.
+
+The rerun passed everything, so 2 to 5 were the environment of the first run, as far as can be told.
+
+Two more runs with the watcher logging and the Shift+right-click fix: each failed one check, a
+different one each time, and all checks passed across the runs.
+
+- **"Dragging an icon onto another"** failed with SmokeB in the right place. During a drag the tray
+  shows the preview arrangement, so the wait for SmokeB's place could end before the drop saved the
+  order, and the saved order was then read too soon. A race in the test: it now waits for the place
+  and the saved order together. The check after it (dragging onto the chevron, then reading the saved
+  rule) had the same race and was fixed the same way.
+- **exeIcons** failed again in one run and passed in the other. The code shows no timing cause, and
+  the check said nothing about which icon was off; it now lists them when it fails. Open.
+
 ## After Phase 6: layout setting and expanding grid
 
 Date: 2026-10-20. Windows 10 Pro 22H2 (build 19045), same machine. The layout (columns × rows) left the

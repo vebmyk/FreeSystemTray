@@ -26,7 +26,14 @@ namespace FreeSystemTray.Logging
         {
             if (_path != null) return;
             _path = path;
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+            {
+                // No log then (the writer keeps trying to open it), but the app and the watchdog still run.
+            }
             new Thread(WriterLoop) { IsBackground = true, Name = "Log writer" }.Start();
         }
 
@@ -68,10 +75,12 @@ namespace FreeSystemTray.Logging
                         File.Move(_path!, Path.ChangeExtension(_path!, ".old.log"), true);
                     }
                 }
-                catch (IOException)
+                catch (Exception)
                 {
-                    // Logging must never take the app down; try again with the next line.
-                    writer?.Dispose();
+                    // Logging must never take the app down, and an exception escaping this thread
+                    // would end the process (an unwritable log folder or .old.log gives
+                    // UnauthorizedAccessException, not IOException). Try again with the next line.
+                    try { writer?.Dispose(); } catch (Exception) { }
                     writer = null;
                 }
                 if (Queue.IsEmpty) Idle.Set();
