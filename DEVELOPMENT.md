@@ -28,11 +28,36 @@ before running the smoke tests).
 powershell -ExecutionPolicy Bypass -File tools/Publish.ps1
 ```
 
-This makes `dist\FreeSystemTray-0.1.1-win-x64\` and a zip of it: one exe with the .NET runtime
-inside (about 73 MB; nothing to install), the built-in themes, README.md, the third-party licenses,
-and `portable.txt`, which makes the copy keep its settings, themes and logs in a `data` folder
-beside the exe. `-FrameworkDependent` makes a small exe that needs the .NET 10 Desktop Runtime
-instead. Before a release, run the smoke test against the published exe (`-AppPath`).
+This makes two builds, each a folder in `dist\` and a zip of it:
+
+- `FreeSystemTray-0.1.2-win-x64`: one exe with the .NET runtime inside (about 73 MB; nothing to
+  install).
+- `FreeSystemTray-0.1.2-win-x64-framework-dependent`: a small exe that needs the .NET 10 Desktop
+  Runtime (x64) installed, with a `REQUIRES-DOTNET.txt` that says so.
+
+Next to each exe are the built-in themes, README.md, the third-party licenses, and `portable.txt`,
+which makes the copy keep its settings, themes and logs in a `data` folder beside the exe.
+`-Only SelfContained` or `-Only FrameworkDependent` builds just one. Before a release, run the
+smoke test against the published exes (`-AppPath`).
+
+## Releasing
+
+1. Set `<Version>` in `src/FreeSystemTray/FreeSystemTray.csproj` and write
+   `release-notes/VERSION.md` (the release text; without it GitHub generates notes from the commits).
+2. Merge to master, then tag and push the tag:
+
+   ```bash
+   git tag -a v0.1.2 -m "FreeSystemTray 0.1.2"
+   git push origin v0.1.2
+   ```
+
+3. The Release workflow (`.github/workflows/release.yml`) checks that the tag matches the version,
+   runs the unit tests, builds both portable versions with `tools/Publish.ps1` and creates a
+   **draft** release with the two zips. The smoke tests cannot run on GitHub's runners: run them
+   against the exes in the zips (`-AppPath`), then publish the draft.
+
+To rebuild the release for a tag that already exists, run the workflow by hand (Actions, Release,
+Run workflow) with the tag; delete the old draft first.
 
 ## Diagnostic command-line options
 
