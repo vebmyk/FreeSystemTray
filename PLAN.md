@@ -65,7 +65,7 @@ Verified in Phase 0 and Phase 1 on Windows 10 22H2 unless marked otherwise. Deta
 - **Show/hide:** a controller on the UI thread (hotkey, hotspot, auto-hide, commands from `--toggle`, `--show`, `--hide`). The system-wide hooks it needs while an auto-hiding tray is shown (a low-level mouse hook, foreground and menu WinEvents) run on a thread of their own and only pass events on, so they never wait on the tray thread.
 - **Settings layer:** JSON config plus theme files. Live reload (built for `settings.json` in Phase 2). A settings window edits the same settings and applies them at once (Phase 5).
 - **Shell integration:** global hotkey, single-instance mutex, autostart, Explorer-restart handling, and a small watchdog process that broadcasts `TaskbarCreated` if the app dies and removes dead icons from Explorer's tray (the single-instance mutex and the watchdog were built in Phase 1, the hotkey in Phase 2, autostart and FreeSystemTray's own tray icon in Phase 5). Since Phase 6 the watchdog also starts the tray again after a crash (not after it was ended on purpose, and not in a crash loop), and ends a tray whose thread stops answering.
-- **Packaging:** a portable build (`tools/Publish.ps1`): one self-contained exe, the built-in themes, and `portable.txt`, which keeps settings, themes and logs next to the exe (Phase 6).
+- **Packaging:** a portable build (`tools/Publish.ps1`): one self-contained exe and one framework-dependent exe, each with the built-in themes, and `portable.txt`, which keeps settings, themes and logs next to the exe (Phase 6).
 
 ## Phases
 
