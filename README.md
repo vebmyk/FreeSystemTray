@@ -1,5 +1,11 @@
 # FreeSystemTray
 
+<p align="center">
+  <a href="https://github.com/vebmyk/FreeSystemTray/releases/latest">
+    <img src="https://img.shields.io/badge/Download-latest%20release-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Download latest release" height="60">
+  </a>
+</p>
+
 A free-standing system tray (notification area) for Windows: a small borderless window you can put
 anywhere, showing the tray icons of running apps. Clicks, menus, tooltips and flyouts work as they do
 in Explorer's tray, and Explorer's own tray keeps working next to it: every icon stays there too,
