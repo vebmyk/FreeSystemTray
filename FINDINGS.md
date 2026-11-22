@@ -810,7 +810,7 @@ it enters full screen again. Not tested: multiple monitors, real games and video
 
 Date: 2026-09-25 and 26. Same machine and setup as Phase 0 (Windows 10 Pro 22H2, build 19045.7725,
 one 1920×1080 monitor at 100%, ManagedShell 0.0.374 on .NET 10). The code is in `src/`; how to build,
-run and test it is in [README.md](README.md).
+run and test it is in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Phase 1 verdict
 

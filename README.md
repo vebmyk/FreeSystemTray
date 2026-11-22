@@ -2,25 +2,23 @@
 
 A free-standing system tray (notification area) for Windows: a small borderless window you can put
 anywhere, showing the tray icons of running apps. Clicks, menus, tooltips and flyouts work as they do
-in Explorer's tray, and Explorer's own tray keeps working next to it.
+in Explorer's tray, and Explorer's own tray keeps working next to it: every icon stays there too,
+and if FreeSystemTray exits or crashes, Explorer's tray carries on as before.
 
-Status: all phases of [PLAN.md](PLAN.md) are done (tray host, window and placement; show/hide;
-scaling; themes; management: icon rules, hidden icons, a settings window, autostart; robustness and
-a portable build), tested on Windows 10 22H2. Findings from testing, and a checklist of the real apps
-tested, are in [FINDINGS.md](FINDINGS.md).
+Made for and tested on Windows 10 22H2. Windows 11 has not been tested; there it could not tell which
+icons Explorer shows and which it hides (see [Arranging icons](#arranging-icons)).
 
-## Build and run
+## Getting started
 
-Requires Windows 10 and the .NET 10 SDK. `nuget.config` adds nuget.org for this repository.
+1. Unzip `FreeSystemTray-<version>-win-x64.zip` anywhere you can write to. Nothing needs to be
+   installed: the .NET runtime is inside the exe.
+2. Start `FreeSystemTray.exe`. The tray appears above the bottom-right corner of the primary screen.
+3. To have it start when you sign in, turn on **Start FreeSystemTray when I sign in** in the
+   settings (General). This adds it to your Run key, where Task Manager's Startup tab lists it.
 
-```bash
-dotnet build FreeSystemTray.sln
-dotnet test tests/FreeSystemTray.Tests/FreeSystemTray.Tests.csproj
-src/FreeSystemTray/bin/Debug/net10.0-windows/FreeSystemTray.exe
-```
+To build it yourself, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-The tray appears above the bottom-right corner of the primary screen. For a build to use without
-the SDK, see [Portable build](#portable-build).
+## Using it
 
 - **Move it** by dragging the grip on its left edge. It snaps to screen and work-area edges when
   an edge comes within 12 px (at 100% scaling). The position is saved as the corner nearest a screen
@@ -32,45 +30,42 @@ the SDK, see [Portable build](#portable-build).
 - **Drag an icon** to move it, onto the chevron (**^**) to hide it in the hidden-icons flyout, or out
   of the flyout back into the tray. In a grid of a fixed size the chevron expands the tray instead
   (see [Layout](#layout-of-the-icons)). **Shift+right-click** an icon to choose where it goes.
-- **Ctrl+Alt+Shift+T** hides and shows the tray (configurable, see below).
+- **Ctrl+Alt+Shift+T** hides and shows the tray (configurable, see
+  [Showing and hiding](#showing-and-hiding)).
 - Only one instance runs at a time. `FreeSystemTray.exe --exit` closes the running one.
 
 FreeSystemTray's own icon also shows in Explorer's tray, so the menu and settings can be reached while
-the tray is hidden. Turn it off in the settings (General) or with `"appIcon": false`. **Start
-FreeSystemTray when I sign in** (settings, General) adds it to the user's Run key, where Task
-Manager's Startup tab lists it.
-
-Settings are in `%LOCALAPPDATA%\FreeSystemTray\settings.json` and logs in
-`%LOCALAPPDATA%\FreeSystemTray\logs` (in a portable copy, in `data` next to the exe). Edits to the
-settings file apply while the app runs. It may have comments and trailing commas, as theme files may;
-the app does not keep them when it saves.
-
-A second copy of the exe runs as a watchdog. If the tray process crashes or is killed, the watchdog
-hands the icons back to Explorer. After a crash it also starts FreeSystemTray again, unless it keeps
-crashing soon after starting (three times in a row); not when someone ended it on purpose (Task
-Manager, `taskkill`), and not while Windows is signing out. **Start FreeSystemTray again if it
-crashes** (settings, General) or `"restartAfterCrash": false` turns that off. If the tray stops
-responding for about 25 s (apps' icon messages to it then fail), the watchdog ends it and treats it
-as a crash.
+the tray is hidden. Turn it off in the settings (General) or with `"appIcon": false`.
 
 Tooltips and popups behave as in Explorer's tray: apps whose icons ask for the standard tooltip get
-it, after the same delay; version 4 icons that do not are sent `NIN_POPUPOPEN` instead, to show a
-popup of their own. A rule's replacement tooltip is always shown.
+it, after the same delay; the others can show a popup of their own. A rule's replacement tooltip
+(see [Arranging icons](#arranging-icons)) is always shown.
 
-### Portable build
+### If it crashes
 
-```bash
-powershell -ExecutionPolicy Bypass -File tools/Publish.ps1
-```
+A second copy of the exe runs alongside as a watchdog. If the tray crashes or is killed, the
+watchdog hands the icons back to Explorer. After a crash it also starts FreeSystemTray again, unless
+it keeps crashing soon after starting (three times in a row); not when someone ended it on purpose
+(Task Manager, `taskkill`), and not while Windows is signing out. **Start FreeSystemTray again if it
+crashes** (settings, General) or `"restartAfterCrash": false` turns that off. If the tray stops
+responding for about 25 s, the watchdog ends it and treats it as a crash.
 
-This makes `dist\FreeSystemTray-0.1.0-win-x64\` and a zip of it: one exe with the .NET runtime
-inside (about 73 MB; nothing to install), the built-in themes, the README and the third-party
-licenses, and `portable.txt`. While `portable.txt` is next to the exe, settings, themes and logs are kept in a
-`data` folder beside it; delete it to use `%LOCALAPPDATA%\FreeSystemTray` instead. Unzip it
-anywhere you can write to. `-FrameworkDependent` makes a small exe that needs the .NET 10 Desktop
-Runtime instead.
+## Settings and files
 
-### Arranging icons
+Everything in the settings window is also in `settings.json`, described in the sections below.
+
+| | Normal copy | Portable copy (`portable.txt` next to the exe) |
+|---|---|---|
+| Settings | `%LOCALAPPDATA%\FreeSystemTray\settings.json` | `data\settings.json` next to the exe |
+| Your themes | `%LOCALAPPDATA%\FreeSystemTray\themes` | `data\themes` |
+| Logs | `%LOCALAPPDATA%\FreeSystemTray\logs` | `data\logs` |
+
+The zip comes with `portable.txt`; delete it to keep everything in `%LOCALAPPDATA%\FreeSystemTray`
+instead. Edits to the settings file apply while the app runs. It may have comments and trailing
+commas, as theme files may; the app does not keep them when it saves. If something does not work
+(a hotkey another program holds, a theme that does not load), the log says why.
+
+## Arranging icons
 
 Each icon goes in the tray, in the hidden-icons flyout (opened with the chevron at the end of the
 tray, as in Explorer), or nowhere. Rules decide; icons without one go where `default` says. Hiding
@@ -107,7 +102,7 @@ An icon its app has hidden stays hidden whatever the rules say. Where Explorer s
 read from Explorer's own tray every few seconds (Windows 10; on a Windows without those toolbars,
 such as Windows 11, it is unknown and the tray is used).
 
-### Showing and hiding
+## Showing and hiding
 
 Hiding only hides the window: apps keep adding and updating their icons, and while the window is
 hidden their menus and flyouts open at Explorer's taskbar.
@@ -151,7 +146,7 @@ The show/hide part of `settings.json`, with its defaults:
 | `hideOnClickAway` | Auto-hide: hide on a click outside the tray or a switch to another window. |
 | `animation` | `None`, `Fade`, or `Slide` (out through the tray's edge that faces the nearest screen edge). |
 
-### Layout of the icons
+## Layout of the icons
 
 A row, a column or a grid, set apart from the theme: `columns` × `rows` in the settings window
 (Appearance) or in `settings.json`. `0` means as many as needed.
@@ -175,7 +170,7 @@ tray's anchor corner (upwards for a tray at the bottom), so the grid and the che
 they are. Another click, or the tray hiding, collapses it. The hidden-icons flyout is not used.
 Dragging an icon onto the chevron expands the tray too.
 
-### Size
+## Size
 
 Two independent sizes: the icons, and everything around them (the padding in each icon's cell, the
 grip, the border and the margins). Each takes any value, as a percentage or in pixels; pixels are
@@ -203,7 +198,7 @@ grows or shrinks around its anchor corner.
 Apps hand over one small image per icon (16 to 48 px were seen); there is no larger one to ask for,
 so large sizes are upscaled from it.
 
-### Themes
+## Themes
 
 Choose a theme from the menu's **Theme** submenu, the settings window (Appearance), or with
 `"theme": "Glass"` in `settings.json`. Built in: Dark (the default), Light, Glass, Acrylic, Minimal
@@ -239,7 +234,7 @@ and in the end from Dark. Sizes are pixels at a tray size of 100% and grow with 
 | `background.blur` | `None`, `Blur` (what is behind the tray, blurred, seen through the background colour) or `Acrylic` (Windows 10's acrylic, tinted with the background colour). While Windows' "Transparency effects" is off, Windows cannot blur, and the tray uses its background colour, opaque. |
 | `grip.position` | `Auto` (left of a row or grid, above a column), `Left`, `Top`, `Right` or `Bottom`. |
 | `icons.layout`, `icons.gridColumns` | No longer read: the layout is a setting. A theme that has them gets a note in the log. |
-| `xaml` | A XAML resource dictionary, relative to the theme file, for what theme files cannot say, such as gradients. It can replace these resources: the brushes `Tray.Background`, `Tray.Foreground`, `Tray.BorderBrush`, `Tray.GripBrush`, `Icon.HoverBrush`, `Icon.PressedBrush`, `ToolTip.Background`, `ToolTip.Foreground`, `ToolTip.BorderBrush`; `ToolTip.BorderThickness` and `ToolTip.Padding` (Thickness), `ToolTip.CornerRadius` (CornerRadius), `ToolTip.FontFamily` and `ToolTip.FontSize`; and the tooltip style (an implicit `Style` for `ToolTip`). See `Themes/Gradient.xaml`. **XAML can run code: only use XAML files you trust.** |
+| `xaml` | A XAML resource dictionary, relative to the theme file, for what theme files cannot say, such as gradients. It can replace these resources: the brushes `Tray.Background`, `Tray.Foreground`, `Tray.BorderBrush`, `Tray.GripBrush`, `Icon.HoverBrush`, `Icon.PressedBrush`, `ToolTip.Background`, `ToolTip.Foreground`, `ToolTip.BorderBrush`; `ToolTip.BorderThickness` and `ToolTip.Padding` (Thickness), `ToolTip.CornerRadius` (CornerRadius), `ToolTip.FontFamily` and `ToolTip.FontSize`; and the tooltip style (an implicit `Style` for `ToolTip`). See `Themes\Gradient.xaml` next to the exe. **XAML can run code: only use XAML files you trust.** |
 
 A background is never fully transparent: Windows lets clicks through fully transparent pixels. Some
 icons are white (on this test machine, Windows' own volume, network and battery icons) and hard to
@@ -251,98 +246,31 @@ theme (and its XAML) into your themes folder and selects it; a running tray swit
 A theme whose XAML would land outside the themes folder (`"xaml": "..\\other.xaml"`) is not imported.
 Both write what happened to the log and exit with 1 if they fail.
 
-### Command line
+## Command line
 
 | Option | Effect |
 |---|---|
-| `--settings FILE` | Use another settings file. |
-| `--log-dir DIR` | Write logs to DIR. |
-| `--verbose` | Log every tray message and position query, every click and window switch auto-hide sees, and ManagedShell's debug output. |
-| `--diag DIR` | Write `state.json` (host status, window visibility, window, icon and hotspot rectangles) to DIR every 250 ms for the smoke test. Implies `--log-dir DIR --verbose`. |
 | `--exit` | Close the running instance and wait for it to exit. |
 | `--toggle`, `--show`, `--hide` | Show or hide the running instance's tray, for example from a shortcut or a script. |
 | `--open-settings` | Show the running instance's tray and its settings window. Starting the exe while it runs does the same. |
-| `--autostart` | Started at sign-in (the Run key's command has it): wait up to a minute for Explorer's taskbar, and exit quietly if an instance is running already. |
-| `--import-theme FILE`, `--export-theme FILE` | Import a theme and switch to it, or write the current one to FILE (see "Themes"). |
-| `--no-watchdog` | Don't start the watchdog process. |
-| `--no-mirror`, `--no-topmost-fix`, `--no-autohide-forward`, `--no-query-routing`, `--no-own-import`, `--no-role-keeper`, `--no-explorer-sync` | Turn off one workaround (ManagedShell as shipped), for comparison tests. |
-| `--debug-crash`, `--debug-hang SECONDS` | Make the running instance crash, or stop responding for SECONDS, to test the watchdog. Only an instance started with `--diag` does. |
+| `--import-theme FILE`, `--export-theme FILE` | Import a theme and switch to it, or write the current one to FILE (see [Themes](#themes)). |
+| `--settings FILE` | Use another settings file. |
+| `--log-dir DIR` | Write logs to DIR. |
+| `--verbose` | Log much more, for tracking down a problem. |
+| `--autostart` | Used by sign-in autostart: wait up to a minute for Explorer's taskbar, and exit quietly if an instance is running already. |
 
-## How it works
+Options for testing and diagnosis are in [DEVELOPMENT.md](DEVELOPMENT.md#diagnostic-command-line-options).
 
-[ManagedShell](https://github.com/cairoshell/ManagedShell) (Apache-2.0, pinned to 0.0.374) creates a
-hidden `Shell_TrayWnd` above Explorer's, so apps send their icon messages to this app. On top of it,
-`ManagedShellTrayHost` subclasses that window to make running next to Explorer safe:
+## Removing it
 
-- every icon message is mirrored to Explorer's tray, with a full add when Explorer has lost an icon;
-- auto-hide queries are answered by Explorer;
-- icon- and taskbar-position queries are answered with this window only when the user is
-  interacting with it, so flyouts opened from Explorer's own tray stay at the taskbar;
-- Explorer's taskbar gets its always-on-top flag back after ManagedShell takes it away;
-- Explorer's own tray is read now and then (on a background thread) to learn where Explorer shows
-  each icon, and which ones it hides;
-- Explorer's icons are imported at start by reading its tray, without switching off its "hide
-  inactive icons" (which reversed the order of its hidden icons);
-- when Explorer's taskbar goes above this app's `Shell_TrayWnd` (whenever it gets the foreground),
-  a Z-order event raises ours again within about a millisecond, and icon changes that reached only
-  Explorer meanwhile are caught up on;
-- after Explorer restarts, its new tray gets the icons it lacks, and icons of windows that no longer
-  exist are removed from both trays;
-- hovering sends apps what Explorer sends them.
+Turn off **Start FreeSystemTray when I sign in** (settings, General), exit it from its menu, and
+delete its folder. A normal copy also leaves `%LOCALAPPDATA%\FreeSystemTray` (settings, themes and
+logs), which you can delete. Explorer's tray has kept every icon all along, so nothing needs to be
+restored.
 
-All shell code is behind `ITrayHost` in `src/FreeSystemTray.TrayHost`. FINDINGS.md explains why
-each workaround is needed.
+## License and third-party code
 
-## Smoke test
-
-Run it before every ManagedShell upgrade and after changes to the tray host, show/hide, scaling,
-themes or icon management. It builds the solution, starts five test tray apps and the app, and
-checks mirroring, the fix-ups, the query answers, the import, taking the host role back and catching
-up afterwards, removing icons of dead apps, clicks, tooltips and popups, showing and hiding
-(commands, the hidden state, a settings edit, hotspot, hotkey, click-away, the timer, a menu keeping
-the tray shown), stepping behind full-screen windows, icon and tray sizes, themes, icon rules and the
-hidden-icons flyout (rules, an icon Windows hides, order, dragging, the icon menu), the tray's own
-menus staying open, the app's own icon, the settings window, the hand-back to Explorer after an exit
-and after a kill, and the watchdog after a real crash and a hang (107 checks).
-
-```bash
-powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-SmokeTest.ps1
-```
-
-For about four minutes it moves the mouse, clicks and drags the test icons, clicks windows of its
-own, presses the hotkey, Shift and Esc, and twice covers the primary screen with a full-screen window
-of its own for a few seconds; before each step it waits until mouse and keyboard have been left alone
-for 1.5 s. `-SkipMouse` leaves those checks out. It also shows one Windows notification from the
-balloon check, tells Explorer to hide one test icon for a few seconds, puts Explorer's taskbar above
-the tray's for a moment, near the end opens the settings window (which takes the keyboard focus), and
-lets a test tray hang for about 25 s. FreeSystemTray must not be running, and no elevated window may
-be in the foreground (Windows drops simulated input then). `-AppPath` tests a published exe instead of
-the build. The exit code is the number of failed checks.
-
-The Explorer restart test restarts Explorer twice while FreeSystemTray hosts the tray, then exits it
-once and kills it once, and checks that Explorer's tray has every icon again each time (20 checks).
-It refuses to run while a File Explorer window is open; the taskbar disappears for a few seconds each
-time.
-
-```bash
-powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-ExplorerRestartTest.ps1
-```
-
-## Layout
-
-| Path | What |
-|---|---|
-| `src/FreeSystemTray.TrayHost` | `ITrayHost` and its ManagedShell implementation: the only code that talks to the shell. |
-| `src/FreeSystemTray` | The WPF app: tray window, placement, show/hide (`ShowHide/`), scaling (`Scaling/`), themes (`Theming/`, and the built-in ones in `Themes/`), icon rules and arrangement (`Icons/`), the hidden-icons flyout, dragging icons, the settings window, the app's own icon, autostart, settings, logging, watchdog. |
-| `tests/FreeSystemTray.Tests` | Unit tests: placement, message formats, routing and fix-up rules, settings, hotkeys, hotspots, auto-hide rules, full-screen tracking, sizes and icon resampling, themes, the icon grid, icon rules, arrangement and order, where Explorer shows an icon, flyout placement, autostart, catching up with Explorer's tray after a gap, building tray messages, the crash policy. |
-| `tests/smoke` | The end-to-end smoke test and the Explorer restart test. |
-| `tools/Make-AppIcon.ps1` | Draws `src/FreeSystemTray/FreeSystemTray.ico`. |
-| `tools/Publish.ps1` | The portable build. |
-| `licenses` | Third-party notices and ManagedShell's license, copied into the portable build. |
-| `spike` | Phase 0 feasibility spike, the test tray app and the SpikeTool harness (see [spike/README.md](spike/README.md)). |
-
-## Third-party code
-
-ManagedShell is licensed under Apache-2.0 (it has no NOTICE file); the .NET runtime and the packages
-ManagedShell uses are MIT. The portable build carries `THIRD-PARTY-NOTICES.txt` and
-`ManagedShell-LICENSE.txt` from `licenses/`. FreeSystemTray itself has no license file yet.
+FreeSystemTray itself has no license file yet. It uses
+[ManagedShell](https://github.com/cairoshell/ManagedShell), licensed under Apache-2.0 (it has no
+NOTICE file); the .NET runtime and the packages ManagedShell uses are MIT. The portable build carries
+`THIRD-PARTY-NOTICES.txt` and `ManagedShell-LICENSE.txt`.

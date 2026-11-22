@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 FreeSystemTray is a free-standing Windows system tray (WPF, .NET 10, Windows 10 22H2) that runs
-*next to* Explorer's tray, not instead of it. README.md is the user documentation, PLAN.md the
+*next to* Explorer's tray, not instead of it. README.md is the user documentation, DEVELOPMENT.md how to build and test, PLAN.md the
 architecture and decisions, FINDINGS.md the per-phase test findings and why each shell workaround
 exists. Read the relevant FINDINGS.md section before changing a workaround.
 
@@ -26,7 +26,7 @@ powershell -ExecutionPolicy Bypass -File tools/Publish.ps1                      
   test with `-AppPath` against the published exe before a release. Exit code = failed checks.
 - `--diag DIR` writes `state.json` every 250 ms (used by the smoke tests); `--verbose` logs every
   tray message. `--no-mirror`, `--no-role-keeper`, etc. switch off single workarounds for comparison.
-  Full option list: README.md "Command line".
+  User options: README.md "Command line"; diagnostic ones: DEVELOPMENT.md.
 
 ## Architecture
 
