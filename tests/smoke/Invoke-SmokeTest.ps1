@@ -56,7 +56,7 @@
   powershell -ExecutionPolicy Bypass -File tests\smoke\Invoke-SmokeTest.ps1
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File tests\smoke\Invoke-SmokeTest.ps1 -AppPath dist\FreeSystemTray-0.1.0-win-x64\FreeSystemTray.exe
+  powershell -ExecutionPolicy Bypass -File tests\smoke\Invoke-SmokeTest.ps1 -AppPath dist\FreeSystemTray-0.1.1-win-x64\FreeSystemTray.exe
   Tests a published build (tools\Publish.ps1); the test apps come from the -Configuration build.
 #>
 param(
