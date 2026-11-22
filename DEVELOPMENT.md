@@ -56,8 +56,9 @@ smoke test against the published exes (`-AppPath`).
    **draft** release with the two zips. The smoke tests cannot run on GitHub's runners: run them
    against the exes in the zips (`-AppPath`), then publish the draft.
 
-To rebuild the release for a tag that already exists, run the workflow by hand (Actions, Release,
-Run workflow) with the tag; delete the old draft first.
+Instead of pushing a tag you can run the workflow by hand (Actions, Release, Run workflow) with the
+tag name: it builds the tag if it exists, otherwise the chosen branch, and creates the tag there
+(when the draft is published). To rebuild a release, delete its old draft first.
 
 ## Diagnostic command-line options
 
