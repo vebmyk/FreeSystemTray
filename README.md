@@ -276,7 +276,7 @@ restored.
 
 ## License and third-party code
 
-FreeSystemTray itself has no license file yet. It uses
-[ManagedShell](https://github.com/cairoshell/ManagedShell), licensed under Apache-2.0 (it has no
-NOTICE file); the .NET runtime and the packages ManagedShell uses are MIT. The portable build carries
+FreeSystemTray uses
+[ManagedShell](https://github.com/cairoshell/ManagedShell), licensed under Apache-2.0;
+the .NET runtime and the packages ManagedShell uses are MIT. The portable build carries
 `THIRD-PARTY-NOTICES.txt` and `ManagedShell-LICENSE.txt`.
