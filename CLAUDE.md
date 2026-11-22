@@ -16,7 +16,7 @@ dotnet test tests/FreeSystemTray.Tests/FreeSystemTray.Tests.csproj --filter "Ful
 src/FreeSystemTray/bin/Debug/net10.0-windows/FreeSystemTray.exe
 powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-SmokeTest.ps1            # end-to-end, ~4 min, -SkipMouse to skip input
 powershell -ExecutionPolicy Bypass -File tests/smoke/Invoke-ExplorerRestartTest.ps1  # restarts Explorer
-powershell -ExecutionPolicy Bypass -File tools/Publish.ps1                           # portable build into dist/
+powershell -ExecutionPolicy Bypass -File tools/Publish.ps1                           # portable builds (self-contained + framework-dependent) into dist/
 ```
 
 - Only one instance runs; `FreeSystemTray.exe --exit` closes the running one. The smoke tests

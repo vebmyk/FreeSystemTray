@@ -63,12 +63,17 @@ popup of their own. A rule's replacement tooltip is always shown.
 powershell -ExecutionPolicy Bypass -File tools/Publish.ps1
 ```
 
-This makes `dist\FreeSystemTray-0.1.0-win-x64\` and a zip of it: one exe with the .NET runtime
-inside (about 73 MB; nothing to install), the built-in themes, the README and the third-party
-licenses, and `portable.txt`. While `portable.txt` is next to the exe, settings, themes and logs are kept in a
+This makes two builds, each a folder in `dist\` and a zip of it:
+
+- `FreeSystemTray-0.1.0-win-x64`: one exe with the .NET runtime inside (about 73 MB; nothing to
+  install).
+- `FreeSystemTray-0.1.0-win-x64-framework-dependent`: a small exe that needs the
+  [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (x64) installed.
+
+Next to the exe are the built-in themes, the README and the third-party licenses, and
+`portable.txt`. While `portable.txt` is next to the exe, settings, themes and logs are kept in a
 `data` folder beside it; delete it to use `%LOCALAPPDATA%\FreeSystemTray` instead. Unzip it
-anywhere you can write to. `-FrameworkDependent` makes a small exe that needs the .NET 10 Desktop
-Runtime instead.
+anywhere you can write to. `-Only SelfContained` or `-Only FrameworkDependent` builds just one.
 
 ### Arranging icons
 
