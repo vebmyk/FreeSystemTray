@@ -40,6 +40,25 @@ which makes the copy keep its settings, themes and logs in a `data` folder besid
 `-Only SelfContained` or `-Only FrameworkDependent` builds just one. Before a release, run the
 smoke test against the published exes (`-AppPath`).
 
+## Releasing
+
+1. Set `<Version>` in `src/FreeSystemTray/FreeSystemTray.csproj` and write
+   `release-notes/VERSION.md` (the release text; without it GitHub generates notes from the commits).
+2. Merge to master, then tag and push the tag:
+
+   ```bash
+   git tag -a v0.1.2 -m "FreeSystemTray 0.1.2"
+   git push origin v0.1.2
+   ```
+
+3. The Release workflow (`.github/workflows/release.yml`) checks that the tag matches the version,
+   runs the unit tests, builds both portable versions with `tools/Publish.ps1` and creates a
+   **draft** release with the two zips. The smoke tests cannot run on GitHub's runners: run them
+   against the exes in the zips (`-AppPath`), then publish the draft.
+
+To rebuild the release for a tag that already exists, run the workflow by hand (Actions, Release,
+Run workflow) with the tag; delete the old draft first.
+
 ## Diagnostic command-line options
 
 Besides the options in [README.md](README.md#command-line):
