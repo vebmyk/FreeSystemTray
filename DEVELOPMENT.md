@@ -28,7 +28,7 @@ before running the smoke tests).
 powershell -ExecutionPolicy Bypass -File tools/Publish.ps1
 ```
 
-This makes `dist\FreeSystemTray-0.1.0-win-x64\` and a zip of it: one exe with the .NET runtime
+This makes `dist\FreeSystemTray-0.1.1-win-x64\` and a zip of it: one exe with the .NET runtime
 inside (about 73 MB; nothing to install), the built-in themes, README.md, the third-party licenses,
 and `portable.txt`, which makes the copy keep its settings, themes and logs in a `data` folder
 beside the exe. `-FrameworkDependent` makes a small exe that needs the .NET 10 Desktop Runtime
